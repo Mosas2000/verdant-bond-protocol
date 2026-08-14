@@ -11,7 +11,7 @@ import { AuthService } from './auth.service';
   template: `
     <div class="auth-page">
       <div class="auth-card">
-        <h1>NbS Bond Protocol</h1>
+        <h1>Verdant Bond Protocol</h1>
         <p class="subtitle">Sign in with your Stellar wallet</p>
 
         <ng-container *ngIf="!walletService.isConnected()">

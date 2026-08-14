@@ -1,18 +1,18 @@
 <div align="center">
 
-# 🌍 NbS Bond Protocol
+# 🌍 Verdant Bond Protocol
 
 ### *Tokenized Nature-based Solution Bonds on Stellar*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![CI](https://github.com/your-org/nbs-bond-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/nbs-bond-protocol/actions/workflows/ci.yml)
+[![CI](https://github.com/prissca/verdant-bond-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/prissca/verdant-bond-protocol/actions/workflows/ci.yml)
 [![Built on Stellar](https://img.shields.io/badge/Built%20on-Stellar-7B68EE)](https://stellar.org)
-[![Soroban](https://img.shields.io/badge/Contracts-Soroban%20%7C%20Rust-orange)](https://soroban.stellar.org)
+[![Soroban](https://img.shields.io/badge/Contracts-Soroban%20%7C%20Rust-orange)](https://developers.stellar.org/docs/build/smart-contracts/overview)
 [![NestJS](https://img.shields.io/badge/API-NestJS-red)](https://nestjs.com)
 [![Angular](https://img.shields.io/badge/Frontend-Angular-DD0031)](https://angular.io)
 [![IPFS](https://img.shields.io/badge/Storage-IPFS-65C2CB)](https://ipfs.tech)
-[![Contract Count](https://img.shields.io/badge/Contracts-6-blue)](https://github.com/your-org/nbs-bond-protocol)
-[![Test Coverage](https://img.shields.io/badge/Coverage-Pending-yellow)](https://github.com/your-org/nbs-bond-protocol)
+[![Contract Count](https://img.shields.io/badge/Contracts-6-blue)](https://github.com/prissca/verdant-bond-protocol)
+[![Test Coverage](https://img.shields.io/badge/Coverage-Pending-yellow)](https://github.com/prissca/verdant-bond-protocol)
 
 > **Redefining green finance** — where bond interest is paid in carbon and biodiversity credits,  
 > every tranche backs a living ecosystem, and DeFi unlocks liquidity for the planet.
@@ -37,7 +37,7 @@
 - [Credit Types Supported](#-credit-types-supported)
 - [Secondary Market](#-secondary-market)
 - [Security Model](#-security-model)
-- [Relationship to CarbonChain](#-relationship-to-carbonchain)
+- [CarbonChain Integration](#-carbonchain-integration)
 - [Getting Started](#-getting-started)
 - [Environment Variables](#-environment-variables)
 - [Project Structure](#-project-structure)
@@ -56,7 +56,7 @@
 
 ## 🌿 Overview
 
-**NbS Bond Protocol** is a blockchain-native green finance instrument built on the [Stellar](https://stellar.org) network. It issues bonds where **coupon payments are denominated in carbon credits and biodiversity credits** rather than fiat currency — directly linking investor returns to the ecological performance of real-world nature-based projects.
+**Verdant Bond Protocol** is a blockchain-native green finance instrument built on the [Stellar](https://stellar.org) network. It issues bonds where **coupon payments are denominated in carbon credits and biodiversity credits** rather than fiat currency — directly linking investor returns to the ecological performance of real-world nature-based projects.
 
 Each bond tranche is backed by a specific, verifiable reforestation, blue carbon (mangrove, seagrass, wetland), or biodiversity restoration project. Smart contracts automate the entire bond lifecycle, while on-chain oracles provide tamper-resistant proof of carbon stock growth.
 
@@ -90,7 +90,7 @@ The global voluntary carbon market exceeded **$2 billion** in 2023 and is projec
 - **Access barriers** — Minimum investment sizes ($100,000+) exclude retail and emerging-market investors
 - **Settlement friction** — Manual credit verification and distribution creates costly delays
 
-### What NbS Bond Protocol Changes
+### What Verdant Bond Protocol Changes
 
 | Problem | Our Solution |
 |---|---|
@@ -103,7 +103,7 @@ The global voluntary carbon market exceeded **$2 billion** in 2023 and is projec
 
 ### Our Thesis
 
-> Nature-based solutions represent the single largest untapped carbon sink on Earth. Mobilizing private capital toward them at scale requires instruments that are **credible, liquid, and programmable**. NbS Bond Protocol is that instrument.
+> Nature-based solutions represent the single largest untapped carbon sink on Earth. Mobilizing private capital toward them at scale requires instruments that are **credible, liquid, and programmable**. Verdant Bond Protocol is that instrument.
 
 ---
 
@@ -121,7 +121,7 @@ Nature-based Solutions are actions that protect, sustainably manage, or restore 
 
 ### What is a Carbon Credit?
 
-A single carbon credit represents **one metric tonne of CO₂ equivalent** (tCO₂e) either sequestered from the atmosphere or prevented from being emitted. In NbS Bond Protocol, carbon credits issued as Stellar Assets are:
+A single carbon credit represents **one metric tonne of CO₂ equivalent** (tCO₂e) either sequestered from the atmosphere or prevented from being emitted. In Verdant Bond Protocol, carbon credits issued as Stellar Assets are:
 
 - Minted by the `CouponEngine` contract upon verified oracle reports
 - Traceable to a specific project and measurement period
@@ -130,7 +130,7 @@ A single carbon credit represents **one metric tonne of CO₂ equivalent** (tCO�
 
 ### What is a Biodiversity Credit?
 
-A biodiversity credit represents a **measurable, verifiable unit of biodiversity outcome** — such as a hectare of restored habitat, or a population increase of a threatened species. Biodiversity credits are an emerging asset class, and NbS Bond Protocol is architected to accommodate them alongside carbon credits as the market matures.
+A biodiversity credit represents a **measurable, verifiable unit of biodiversity outcome** — such as a hectare of restored habitat, or a population increase of a threatened species. Biodiversity credits are an emerging asset class, and Verdant Bond Protocol is architected to accommodate them alongside carbon credits as the market matures.
 
 ### Bond Tranche
 
@@ -147,7 +147,7 @@ A bond tranche is a discrete issuance with defined:
 
 ```
   ┌──────────────────────────────────────────────────────────────────────┐
-  │                       NbS BOND LIFECYCLE                            │
+  │                        VERDANT BOND LIFECYCLE                        │
   │                                                                      │
   │  ① REGISTRATION      ② ISSUANCE           ③ INVESTMENT             │
   │  Project developer   Bond issuer creates   Investors purchase       │
@@ -221,7 +221,7 @@ Carbon stock data is sourced from multiple independent providers: certified audi
 All sensitive contract interactions are protected by nonce-based replay protection. Each signed transaction consumes a unique nonce, preventing double-spend attacks, replay attacks, and front-running across the protocol.
 
 ### 🌊 Blue Carbon Support
-The protocol is purpose-built to support blue carbon projects — coastal ecosystems that sequester carbon at 3–5x the rate of terrestrial forests but have been chronically underfunded due to measurement complexity. NbS Bond Protocol's oracle architecture handles the unique measurement methodologies of blue carbon science.
+The protocol is purpose-built to support blue carbon projects — coastal ecosystems that sequester carbon at 3–5x the rate of terrestrial forests but have been chronically underfunded due to measurement complexity. Verdant Bond Protocol's oracle architecture handles the unique measurement methodologies of blue carbon science.
 
 ### 🤝 CarbonChain Integration
 Built as a composable layer on top of CarbonChain's existing credit infrastructure, the protocol reuses battle-tested oracle feeds, IPFS anchoring patterns, and DEX integrations — dramatically reducing time-to-market and smart contract surface area.
@@ -454,7 +454,7 @@ pub fn challenge_report(
 
 ### `DEXRouter`
 
-Manages bond token and coupon credit listings, order routing, and settlement on the Stellar DEX. The router abstracts Stellar's native DEX primitives and provides a unified interface for the NbS Bond marketplace.
+Manages bond token and coupon credit listings, order routing, and settlement on the Stellar DEX. The router abstracts Stellar's native DEX primitives and provides a unified interface for the Verdant Bond marketplace.
 
 ```rust
 // Escrow quote assets before trading
@@ -501,7 +501,7 @@ Handles the permanent on-chain retirement of carbon and biodiversity credits. Re
 
 ## 🛰️ Oracle & Project Performance
 
-The integrity of this protocol depends entirely on the quality and trustworthiness of its ecological data. NbS Bond Protocol employs a **multi-source, multi-layer oracle architecture**:
+The integrity of this protocol depends entirely on the quality and trustworthiness of its ecological data. Verdant Bond Protocol employs a **multi-source, multi-layer oracle architecture**:
 
 ### Data Sources
 
@@ -699,8 +699,8 @@ Ensure the following are installed on your development machine:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/nbs-bond-protocol.git
-cd nbs-bond-protocol
+git clone https://github.com/prissca/verdant-bond-protocol.git
+cd verdant-bond-protocol
 
 # Install API dependencies
 cd api && npm install && cd ..
@@ -776,7 +776,7 @@ KYC_PROVIDER_URL=https://kyc.your-provider.com
 KYC_API_KEY=your_kyc_api_key
 
 # ── Database ─────────────────────────────────────────────────────
-DATABASE_URL=postgresql://user:password@localhost:5432/nbs_bond
+DATABASE_URL=postgresql://user:password@localhost:5432/verdant_bond
 REDIS_URL=redis://localhost:6379
 
 # ── App ──────────────────────────────────────────────────────────
@@ -790,7 +790,7 @@ LOG_LEVEL=debug
 ## 📁 Project Structure
 
 ```
-nbs-bond-protocol/
+verdant-bond-protocol/
 │
 ├── contracts/                          # Soroban smart contracts (Rust)
 │   ├── bond-issuer/
@@ -1030,7 +1030,7 @@ docker-compose logs -f api
 
 ## 🏛️ Governance
 
-NbS Bond Protocol is governed by a multi-stakeholder committee comprising:
+Verdant Bond Protocol is governed by a multi-stakeholder committee comprising:
 
 - **Project Developers** — Register and manage NbS projects
 - **Bond Issuers** — Structure and issue bond tranches
@@ -1054,7 +1054,7 @@ Governance proposals are submitted via on-chain transactions and ratified by a 3
 
 ## ✅ Compliance & KYC
 
-NbS Bond Protocol takes a pragmatic approach to compliance:
+Verdant Bond Protocol takes a pragmatic approach to compliance:
 
 - **KYC/AML** is handled off-chain via an integrated third-party provider before any investor may subscribe to a bond tranche
 - **Accredited investor checks** are configurable per tranche by the bond issuer
@@ -1112,15 +1112,13 @@ Please read [CONTRIBUTING.md](./CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](./CODE
 
 We take security extremely seriously. If you discover a vulnerability, **please do not open a public GitHub issue.**
 
-Instead, email **security@nbs-bond-protocol.org** with:
+Instead, email **nwoguvictoriachiamaka@gmail.com** with:
 - A description of the vulnerability
 - Steps to reproduce
 - Potential impact assessment
 - (Optional) Suggested fix
 
-We operate a **bug bounty program** with rewards up to **$50,000 USDC** for critical smart contract vulnerabilities. Response time SLA: 48 hours for acknowledgement, 7 days for triage.
-
-See [SECURITY.md](./SECURITY.md) for the full disclosure policy and bounty tiers.
+See [SECURITY.md](./SECURITY.md) for the full disclosure policy and scope.
 
 ---
 
@@ -1144,7 +1142,7 @@ This project is licensed under the **MIT License** — see [LICENSE](./LICENSE) 
 
 **Built for the planet. Powered by Stellar.**
 
-*NbS Bond Protocol — where financial returns and ecological restoration are the same thing.*
+*Verdant Bond Protocol — where financial returns and ecological restoration are the same thing.*
 
 ⭐ Star this repo if you believe DeFi can help heal the planet ⭐
 

@@ -27,7 +27,7 @@ export class AuthService {
     }
 
     const nonce = crypto.randomBytes(32).toString('hex');
-    const challenge = `NbS Bond Protocol sign-in\nAddress: ${address}\nNonce: ${nonce}\nTimestamp: ${Date.now()}`;
+    const challenge = `Verdant Bond Protocol sign-in\nAddress: ${address}\nNonce: ${nonce}\nTimestamp: ${Date.now()}`;
 
     await this.redis.set(`challenge:${address}`, challenge, { EX: 300 });
 

@@ -1,7 +1,7 @@
 # Code of Conduct
 
 ## Our Pledge
-We pledge to make participation in NbS Bond Protocol a harassment-free experience for everyone.
+We pledge to make participation in Verdant Bond Protocol a harassment-free experience for everyone.
 
 ## Standards
 - Use welcoming and inclusive language

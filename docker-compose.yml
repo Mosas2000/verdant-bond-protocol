@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_USER: nbs
       POSTGRES_PASSWORD: nbs
-      POSTGRES_DB: nbs_bond
+      POSTGRES_DB: verdant_bond
     ports: ["5432:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
@@ -30,7 +30,7 @@ services:
     environment:
       STELLAR_NETWORK: testnet
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
-      DATABASE_URL: postgresql://nbs:nbs@postgres:5432/nbs_bond
+      DATABASE_URL: postgresql://nbs:nbs@postgres:5432/verdant_bond
       REDIS_URL: redis://redis:6379
     depends_on:
       postgres: { condition: service_healthy }

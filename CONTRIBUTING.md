@@ -1,4 +1,4 @@
-# Contributing to NbS Bond Protocol
+# Contributing to Verdant Bond Protocol
 
 Thank you for your interest in contributing! We welcome contributions from smart contract engineers, climate scientists, financial modelers, oracle architects, and frontend developers.
 
@@ -32,8 +32,8 @@ This project is governed by the [Code of Conduct](CODE_OF_CONDUCT.md). All parti
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/nbs-bond-protocol.git
-cd nbs-bond-protocol
+git clone https://github.com/prissca/verdant-bond-protocol.git
+cd verdant-bond-protocol
 
 # Copy environment template
 cp .env.example api/.env
@@ -50,7 +50,7 @@ cd contracts && cargo build --release && cargo test && cd ..
 ## Project Structure
 
 ```
-nbs-bond-protocol/
+verdant-bond-protocol/
 ├── contracts/            # Soroban smart contracts (Rust)
 │   ├── bond-issuer/
 │   ├── coupon-engine/
@@ -203,14 +203,14 @@ Use the [Feature Request template](.github/ISSUE_TEMPLATE/feature_request.md). I
 
 ## Security Disclosures
 
-**Do not open public GitHub issues for security vulnerabilities.** Instead, email **security@nbs-bond-protocol.org** with details. See [SECURITY.md](SECURITY.md) for our disclosure policy and bug bounty program.
+**Do not open public GitHub issues for security vulnerabilities.** Instead, email **nwoguvictoriachiamaka@gmail.com** with details. See [SECURITY.md](SECURITY.md) for our disclosure policy and scope.
 
 ## Getting Help
 
-- Check existing [issues](https://github.com/your-org/nbs-bond-protocol/issues) and [discussions](https://github.com/your-org/nbs-bond-protocol/discussions)
+- Check existing [issues](https://github.com/prissca/verdant-bond-protocol/issues) and [discussions](https://github.com/prissca/verdant-bond-protocol/discussions)
 - Review [docs/](./docs/) for architecture and design details
-- Open a [discussion](https://github.com/your-org/nbs-bond-protocol/discussions) for questions
+- Open a [discussion](https://github.com/prissca/verdant-bond-protocol/discussions) for questions
 
 ---
 
-Thank you for helping make NbS Bond Protocol better!
+Thank you for helping make Verdant Bond Protocol better!

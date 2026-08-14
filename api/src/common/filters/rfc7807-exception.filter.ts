@@ -31,7 +31,7 @@ export class Rfc7807ExceptionFilter implements ExceptionFilter {
     }
 
     response.status(status).json({
-      type: `https://errors.nbs-bond-protocol.org/${status}`,
+      type: `https://errors.verdant-bond-protocol.org/${status}`,
       title,
       status,
       detail,

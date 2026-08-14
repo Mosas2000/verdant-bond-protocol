@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "=== NbS Bond Protocol — E2E Smoke Test ==="
+echo "=== Verdant Bond Protocol — E2E Smoke Test ==="
 
 # 1. Check toolchain
 echo "[1/6] Checking toolchain..."
