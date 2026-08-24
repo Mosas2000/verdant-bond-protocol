@@ -162,4 +162,71 @@ describe('DexService', () => {
       );
     });
   });
+
+  describe('invalidateOrdersCache', () => {
+    function mockRedis() {
+      const redis = (service as any).redis;
+      redis.scanIterator = jest.fn().mockImplementation(async function* () {});
+      redis.del = jest.fn().mockResolvedValue(0);
+      return redis;
+    }
+
+    it('deletes every cached orders list key instead of the literal orders:* pattern', async () => {
+      const redis = mockRedis();
+      redis.scanIterator = jest.fn().mockImplementation(async function* () {
+        yield 'orders:all:all:1:20';
+        yield 'orders:3:all:1:20';
+      });
+
+      await (service as any).invalidateOrdersCache();
+
+      expect(redis.scanIterator).toHaveBeenCalledWith({ MATCH: 'orders:*' });
+      expect(redis.del).toHaveBeenCalledWith(['orders:all:all:1:20', 'orders:3:all:1:20']);
+    });
+
+    it('does not call DEL when there are no cached orders keys', async () => {
+      const redis = mockRedis();
+
+      await (service as any).invalidateOrdersCache();
+
+      expect(redis.del).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('buyBondTokens', () => {
+    const buyer = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
+    const order: any = {
+      id: 7,
+      seller: buyer,
+      bondId: 3,
+      amount: 1000,
+      pricePerToken: 25,
+      quoteAsset: 'USDC',
+      status: OrderStatus.Open,
+      createdAt: new Date(1700000000 * 1000).toISOString(),
+    };
+
+    it('invalidates the cached orders list after a successful purchase', async () => {
+      const redis = (service as any).redis;
+      redis.get = jest.fn().mockImplementation((key: string) =>
+        key === 'order:7' ? Promise.resolve(JSON.stringify(order)) : Promise.resolve(null),
+      );
+      redis.setEx = jest.fn().mockResolvedValue(true);
+      redis.scanIterator = jest.fn().mockImplementation(async function* () {
+        yield 'orders:all:all:1:20';
+      });
+      redis.del = jest.fn().mockResolvedValue(1);
+      simulateCallMock.mockResolvedValue(nativeToScVal(BigInt(1000), { type: 'i128' }));
+      invokeContractMethodMock.mockResolvedValue({
+        transactionHash: 'txn1',
+        successful: true,
+      });
+
+      await expect(service.buyBondTokens({ orderId: 7, amount: 10, maxPrice: 30 }, buyer)).resolves.toEqual(
+        expect.objectContaining({ id: 7 }),
+      );
+
+      expect(redis.del).toHaveBeenCalledWith(['orders:all:all:1:20']);
+    });
+  });
 });

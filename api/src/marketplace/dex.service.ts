@@ -119,7 +119,7 @@ export class DexService {
     );
 
     const orderId = Number(scValToNative(result));
-    await this.redis.del(`orders:*`);
+    await this.invalidateOrdersCache();
     return this.getOrder(orderId);
   }
 
@@ -153,7 +153,7 @@ export class DexService {
       throw this.mapDexError(error);
     }
 
-    await this.redis.del(`orders:*`);
+    await this.invalidateOrdersCache();
     return this.getOrder(dto.orderId);
   }
 
@@ -170,7 +170,7 @@ export class DexService {
       nonce,
     );
 
-    await this.redis.del(`orders:*`);
+    await this.invalidateOrdersCache();
   }
 
   async getOrder(orderId: number): Promise<OrderResponse> {
@@ -243,6 +243,16 @@ export class DexService {
     );
 
     return { address: callerAddress, asset: dto.asset, amount: dto.amount, transactionHash };
+  }
+
+  private async invalidateOrdersCache(): Promise<void> {
+    const keys: string[] = [];
+    for await (const key of this.redis.scanIterator({ MATCH: 'orders:*' })) {
+      keys.push(key);
+    }
+    if (keys.length > 0) {
+      await this.redis.del(keys);
+    }
   }
 
   private decodeOrder(data: any[]): OrderResponse {
