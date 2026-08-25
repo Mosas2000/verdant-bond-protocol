@@ -1,5 +1,6 @@
 import { hashEvidence } from '../ipfs/evidence';
 import { OracleReportSchema, OracleReport, ReportEvidence } from './schemas';
+import { validateForOnChain } from './validator';
 
 export interface BuildReportInput {
   project_id: string;
@@ -31,7 +32,7 @@ export function buildOracleReport(input: BuildReportInput): OracleReport {
 
   const { ipfs_evidence_hash } = hashEvidence(payload);
 
-  return OracleReportSchema.parse({
+  const report = OracleReportSchema.parse({
     project_id: input.project_id,
     provider: input.provider,
     methodology: input.methodology,
@@ -42,4 +43,8 @@ export function buildOracleReport(input: BuildReportInput): OracleReport {
     ipfs_evidence_hash,
     evidence: input.evidence,
   });
+
+  validateForOnChain(report);
+
+  return report;
 }
