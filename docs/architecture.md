@@ -65,6 +65,7 @@ pub fn execute_purchase(...)   // atomically transfers bonds + escrowed quote
 pub fn cancel_listing(...)
 pub fn set_admin(current_admin, new_admin)
 pub fn get_admin()
+pub fn clean_expired_orders(caller, start_id, limit, nonce)  // batched expired cleanup
 pub fn get_order(...)
 pub fn get_orders_by_seller(...)
 ```
@@ -133,6 +134,8 @@ CreditRetirement ──► CouponEngine (verify credit ownership)
 - Buyers must first `deposit_quote` a quote asset (e.g. USDC) into the DEXRouter; purchases otherwise fail with `DEXError::InsufficientFunds`.
 - `execute_purchase` atomically transfers bond tokens (`BondIssuer.transfer`) and escrowed quote (`price_per_token * amount`) from buyer to seller, so a fill either fully settles or fully reverts.
 - Sellers can `withdraw_quote` their proceeds; `get_quote_balance` reports escrowed balances by symbol.
+- Expired-order cleanup is **cursor-batched**: `clean_expired_orders(caller, start_id, limit, nonce)` scans at most `min(limit, 100)` order IDs per call and returns `(cleaned, next_start_id)` so an off-chain scheduler can finish the book across multiple invocations without a full-table scan.
+- **Tradeoff:** lazy/opportunistic cleanup was considered and rejected: marking an order `Expired` inside `execute_purchase`'s error path cannot work (a Soroban call that returns an error reverts all writes), and scanning a seller's full order list inside `list_bond_tokens` would reintroduce unbounded cost on a user path. The periodic cursor-batched admin sweep is the cleanup mechanism.
 
 ## Coupon Integrity
 

@@ -31,7 +31,14 @@ describe('DexService', () => {
       providers: [
         DexService,
         { provide: ContractService, useValue: contractService },
-        { provide: StellarService, useValue: {} },
+        {
+          provide: StellarService,
+          useValue: {
+            getKeypairFromSecret: jest.fn().mockReturnValue({
+              publicKey: () => 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+            }),
+          },
+        },
         {
           provide: NonceService,
           useValue: { next: jest.fn().mockResolvedValue(0) },
@@ -211,6 +218,36 @@ describe('DexService', () => {
         expect.any(Array),
         0,
       );
+    });
+  });
+
+  describe('cleanExpiredOrders', () => {
+    it('invokes clean_expired_orders with start_id and limit and decodes the result', async () => {
+      // Prefer array-shaped decode path used by scValToNative for contracttype structs
+      invokeContractMethodMock.mockResolvedValue({
+        transactionHash: 'clean1',
+        successful: true,
+        result: xdr.ScVal.scvVec([
+          nativeToScVal(3, { type: 'u32' }),
+          nativeToScVal(BigInt(51), { type: 'u64' }),
+        ]),
+      });
+
+      await expect(service.cleanExpiredOrders(1, 50)).resolves.toEqual({
+        cleaned: 3,
+        nextStartId: 51,
+      });
+
+      expect(invokeContractMethodMock).toHaveBeenCalledWith(
+        expect.any(String),
+        'clean_expired_orders',
+        'SADMIN',
+        expect.any(Array),
+        0,
+      );
+      const args = invokeContractMethodMock.mock.calls[0][3];
+      expect(Number(scValToNative(args[1]))).toBe(1);
+      expect(Number(scValToNative(args[2]))).toBe(50);
     });
   });
 });
