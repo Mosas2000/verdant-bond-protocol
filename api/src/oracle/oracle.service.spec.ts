@@ -5,6 +5,8 @@ import { ContractService } from '../stellar/contract.service';
 import { IpfsService } from '../projects/ipfs.service';
 import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
+import { RedisService } from '../common/services/redis.service';
+import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { ReportStatus } from './interfaces/oracle.interface';
 
 describe('OracleService', () => {
@@ -21,6 +23,8 @@ describe('OracleService', () => {
           provide: NonceService,
           useValue: { next: jest.fn().mockResolvedValue(0) },
         },
+        { provide: RedisService, useValue: {} },
+        { provide: SigningKeyProvider, useValue: {} },
       ],
     }).compile();
 

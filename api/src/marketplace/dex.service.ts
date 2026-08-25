@@ -78,13 +78,12 @@ export class DexService {
       },
     };
 
-    await this.redis.setEx(cacheKey, 30, JSON.stringify(result));
+    await this.redis.cacheSet(cacheKey, 30, JSON.stringify(result), ['orders']);
     return result;
   }
 
   async listBondTokens(dto: ListBondDto, sellerAddress: string): Promise<OrderResponse> {
     const adminSecret = this.getAdminSecret();
-    const nonce = await this.nonceService.next(DEX_ROUTER(), sellerAddress);
 
     const { result } = await this.contractService.invokeContractMethod(
       DEX_ROUTER(), 'list_bond_tokens', adminSecret,
@@ -96,11 +95,12 @@ export class DexService {
         nativeToScVal(dto.quoteAsset, { type: 'symbol' }),
         nativeToScVal(BigInt(dto.expiresAfterSeconds || 604800), { type: 'u64' }),
       ],
-      nonce,
+      sellerAddress,
     );
 
     const orderId = Number(scValToNative(result));
-    await this.redis.del(`orders:*`);
+    await this.redis.invalidateTag('orders');
+    await this.redis.invalidateTag('prices');
     return this.getOrder(orderId);
   }
 
@@ -117,7 +117,6 @@ export class DexService {
     }
 
     const adminSecret = this.getAdminSecret();
-    const nonce = await this.nonceService.next(DEX_ROUTER(), buyerAddress);
 
     try {
       await this.contractService.invokeContractMethod(
@@ -128,19 +127,19 @@ export class DexService {
           nativeToScVal(BigInt(dto.maxPrice), { type: 'i128' }),
           nativeToScVal(BigInt(dto.amount), { type: 'i128' }),
         ],
-        nonce,
+        buyerAddress,
       );
     } catch (error) {
       throw this.mapDexError(error);
     }
 
-    await this.redis.del(`orders:*`);
+    await this.redis.invalidateTag('orders');
+    await this.redis.invalidateTag('prices');
     return this.getOrder(dto.orderId);
   }
 
   async cancelOrder(orderId: number, callerAddress: string): Promise<void> {
     const adminSecret = this.getAdminSecret();
-    const nonce = await this.nonceService.next(DEX_ROUTER(), callerAddress);
 
     await this.contractService.invokeContractMethod(
       DEX_ROUTER(), 'cancel_listing', adminSecret,
@@ -148,10 +147,11 @@ export class DexService {
         Address.fromString(callerAddress).toScVal(),
         nativeToScVal(BigInt(orderId), { type: 'u64' }),
       ],
-      nonce,
+      callerAddress,
     );
 
-    await this.redis.del(`orders:*`);
+    await this.redis.invalidateTag('orders');
+    await this.redis.invalidateTag('prices');
   }
 
   async getOrder(orderId: number): Promise<OrderResponse> {
@@ -166,7 +166,7 @@ export class DexService {
     });
     const order = this.decodeOrder(scValToNative(orderScVal) as any[]);
 
-    await this.redis.setEx(cacheKey, 60, JSON.stringify(order));
+    await this.redis.cacheSet(cacheKey, 60, JSON.stringify(order), ['orders']);
     return order;
   }
 
@@ -191,7 +191,6 @@ export class DexService {
     callerAddress: string,
   ): Promise<QuoteTransactionResponse> {
     const adminSecret = this.getAdminSecret();
-    const nonce = await this.nonceService.next(DEX_ROUTER(), callerAddress);
 
     const { transactionHash } = await this.contractService.invokeContractMethod(
       DEX_ROUTER(), 'deposit_quote', adminSecret,
@@ -200,7 +199,7 @@ export class DexService {
         nativeToScVal(dto.asset, { type: 'symbol' }),
         nativeToScVal(BigInt(dto.amount), { type: 'i128' }),
       ],
-      nonce,
+      callerAddress,
     );
 
     return { address: callerAddress, asset: dto.asset, amount: dto.amount, transactionHash };
@@ -211,7 +210,6 @@ export class DexService {
     callerAddress: string,
   ): Promise<QuoteTransactionResponse> {
     const adminSecret = this.getAdminSecret();
-    const nonce = await this.nonceService.next(DEX_ROUTER(), callerAddress);
 
     const { transactionHash } = await this.contractService.invokeContractMethod(
       DEX_ROUTER(), 'withdraw_quote', adminSecret,
@@ -220,7 +218,7 @@ export class DexService {
         nativeToScVal(dto.asset, { type: 'symbol' }),
         nativeToScVal(BigInt(dto.amount), { type: 'i128' }),
       ],
-      nonce,
+      callerAddress,
     );
 
     return { address: callerAddress, asset: dto.asset, amount: dto.amount, transactionHash };

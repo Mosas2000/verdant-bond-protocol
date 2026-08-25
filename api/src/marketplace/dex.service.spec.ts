@@ -11,7 +11,7 @@ import { OrderStatus } from './interfaces/marketplace.interface';
 describe('DexService', () => {
   let service: DexService;
   let contractService: { simulateCall: jest.Mock; invokeContractMethod: jest.Mock };
-  let redis: { get: jest.Mock; setEx: jest.Mock; del: jest.Mock };
+  let redis: { get: jest.Mock; setEx: jest.Mock; del: jest.Mock; cacheSet: jest.Mock; invalidateTag: jest.Mock };
 
   const simulateCallMock = jest.fn();
   const invokeContractMethodMock = jest.fn();
@@ -25,6 +25,8 @@ describe('DexService', () => {
       get: jest.fn().mockResolvedValue(null),
       setEx: jest.fn().mockResolvedValue(undefined),
       del: jest.fn().mockResolvedValue(undefined),
+      cacheSet: jest.fn().mockResolvedValue(undefined),
+      invalidateTag: jest.fn().mockResolvedValue(undefined),
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -100,7 +102,7 @@ describe('DexService', () => {
         BigInt(1000),
         BigInt(25),
         'USDC',
-        0,
+         0,
         BigInt(1700000000),
         BigInt(1700604800),
       ];
@@ -181,7 +183,7 @@ describe('DexService', () => {
         'deposit_quote',
         expect.any(String),
         expect.any(Array),
-        0,
+        address,
       );
     });
   });
@@ -209,7 +211,7 @@ describe('DexService', () => {
         'withdraw_quote',
         expect.any(String),
         expect.any(Array),
-        0,
+        address,
       );
     });
   });

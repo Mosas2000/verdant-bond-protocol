@@ -46,7 +46,6 @@ export class OracleService {
     });
 
     const adminSecret = this.getAdminSecret();
-    const nonce = await this.nonceService.next(ORACLE_CONSUMER(), providerAddress);
 
     const { result } = await this.contractService.invokeContractMethod(
       ORACLE_CONSUMER(), 'submit_report', adminSecret,
@@ -59,7 +58,7 @@ export class OracleService {
         nativeToScVal(dto.methodology, { type: 'symbol' }),
         this.toBytes32(ipfsResult.hash),
       ],
-      nonce,
+      providerAddress,
     );
 
     const reportId = Number(scValToNative(result));
@@ -108,7 +107,6 @@ export class OracleService {
 
   async challengeReport(reportId: number, dto: ChallengeDto, challengerAddress: string): Promise<ChallengeResponse> {
     const adminSecret = this.getAdminSecret();
-    const nonce = await this.nonceService.next(ORACLE_CONSUMER(), challengerAddress);
 
     await this.contractService.invokeContractMethod(
       ORACLE_CONSUMER(), 'challenge_report', adminSecret,
@@ -117,7 +115,7 @@ export class OracleService {
         nativeToScVal(BigInt(reportId), { type: 'u64' }),
         this.toBytes32(dto.counterEvidenceHash),
       ],
-      nonce,
+      challengerAddress,
     );
 
     return {
@@ -133,7 +131,6 @@ export class OracleService {
   async registerProvider(dto: RegisterProviderDto): Promise<ProviderResponse> {
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
-    const nonce = await this.nonceService.next(ORACLE_CONSUMER(), adminAddress);
 
     await this.contractService.invokeContractMethod(
       ORACLE_CONSUMER(), 'register_provider', adminSecret,
@@ -142,7 +139,7 @@ export class OracleService {
         Address.fromString(dto.providerAddress).toScVal(),
         nativeToScVal(dto.methodology, { type: 'symbol' }),
       ],
-      nonce,
+      adminAddress,
     );
 
     return {

@@ -204,7 +204,7 @@ describe('BondsService', () => {
       const svc = moduleRef.get(BondsService);
       const result = await svc.sweepUndistributed(3);
 
-      const [contractAddress, method, callerSecret, args, nonce] =
+      const [contractAddress, method, callerSecret, args, nonceAddress] =
         contractService.invokeContractMethod.mock.calls[0];
 
       expect(contractAddress).toBe('');
@@ -215,7 +215,9 @@ describe('BondsService', () => {
         'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
       );
       expect(scValToNative(args[1])).toBe(BigInt(3));
-      expect(nonce).toBe(0);
+      expect(nonceAddress).toBe(
+        'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+      );
       expect(result).toEqual({ bondId: 3, swept: 42, transactionHash: '0xabc' });
     });
   });

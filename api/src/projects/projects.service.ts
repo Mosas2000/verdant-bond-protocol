@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 import { ContractService } from '../stellar/contract.service';
 import { StellarService } from '../stellar/stellar.service';
 import { IpfsService } from './ipfs.service';
@@ -23,6 +23,11 @@ export class ProjectsService {
   ) {}
 
   async register(dto: CreateProjectDto, ownerAddress: string): Promise<ProjectResponse> {
+    try {
+      Address.fromString(ownerAddress);
+    } catch {
+      throw new BadRequestException('Authenticated wallet address is required');
+    }
     const metadata = {
       name: dto.name,
       methodology: dto.methodology,
@@ -40,7 +45,6 @@ export class ProjectsService {
     const ipfsHash = Buffer.from(ipfsResult.hash, 'hex');
 
     const ownerSecret = this.signingKeys.userSecret();
-    const nonce = await this.nonceService.next(PROJECT_REGISTRY(), ownerAddress);
 
     const { result } = await this.contractService.invokeContractMethod(
       PROJECT_REGISTRY(), 'register_project', ownerSecret,
@@ -50,7 +54,7 @@ export class ProjectsService {
         nativeToScVal(dto.methodology, { type: 'symbol' }),
         nativeToScVal(dto.country, { type: 'symbol' }),
       ],
-      nonce,
+      ownerAddress,
     );
 
     const projectId = Number(scValToNative(result));
@@ -107,12 +111,11 @@ export class ProjectsService {
   async approve(id: number): Promise<ProjectResponse> {
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
-    const nonce = await this.nonceService.next(PROJECT_REGISTRY(), adminAddress);
 
     await this.contractService.invokeContractMethod(
       PROJECT_REGISTRY(), 'approve_project', adminSecret,
       [Address.fromString(adminAddress).toScVal(), nativeToScVal(BigInt(id), { type: 'u64' })],
-      nonce,
+      adminAddress,
     );
 
     await this.redis.del(`project:${id}`);
@@ -122,12 +125,11 @@ export class ProjectsService {
   async reject(id: number): Promise<ProjectResponse> {
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
-    const nonce = await this.nonceService.next(PROJECT_REGISTRY(), adminAddress);
 
     await this.contractService.invokeContractMethod(
       PROJECT_REGISTRY(), 'reject_project', adminSecret,
       [Address.fromString(adminAddress).toScVal(), nativeToScVal(BigInt(id), { type: 'u64' })],
-      nonce,
+      adminAddress,
     );
 
     await this.redis.del(`project:${id}`);

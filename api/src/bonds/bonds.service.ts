@@ -53,14 +53,13 @@ export class BondsService {
   async create(dto: CreateBondDto): Promise<BondResponse> {
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
-    const nonce = await this.nonceService.next(BOND_ISSUER(), adminAddress);
 
     const configScVal = this.encodeBondConfig(dto);
 
     const { result } = await this.contractService.invokeContractMethod(
       BOND_ISSUER(), 'issue_bond', adminSecret,
       [Address.fromString(adminAddress).toScVal(), configScVal],
-      nonce,
+      adminAddress,
     );
 
     const bondId = Number(scValToNative(result));
@@ -115,7 +114,6 @@ export class BondsService {
 
   async subscribe(id: number, dto: SubscribeDto): Promise<SubscriptionResponse> {
     const investorSecret = this.signingKeys.investorSecret();
-    const nonce = await this.nonceService.next(BOND_ISSUER(), dto.investorAddress);
     const { transactionHash } = await this.contractService.invokeContractMethod(
       BOND_ISSUER(), 'subscribe', investorSecret,
       [
@@ -123,7 +121,7 @@ export class BondsService {
         nativeToScVal(BigInt(id), { type: 'u64' }),
         nativeToScVal(BigInt(dto.amount), { type: 'i128' }),
       ],
-      nonce,
+      dto.investorAddress,
     );
 
     await this.redis.del(`bond:${id}`);
@@ -153,7 +151,6 @@ export class BondsService {
   async distributeCoupon(id: number, dto: DistributeCouponDto): Promise<CouponDistributionResponse> {
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
-    const nonce = await this.nonceService.next(COUPON_ENGINE(), adminAddress);
 
     const holderAddresses = await this.redis.sMembers(`bond:${id}:holders`);
 
@@ -166,7 +163,7 @@ export class BondsService {
         xdr.ScVal.scvVec(holderAddresses.map((h) => Address.fromString(h).toScVal())),
         nativeToScVal(BigInt(dto.reportId), { type: 'u64' }),
       ],
-      nonce,
+      adminAddress,
     );
 
     const parsed = scValToNative(result) as any[];
@@ -180,7 +177,6 @@ export class BondsService {
 
   async claimCredits(id: number, dto: ClaimCreditsDto): Promise<ClaimCreditsResponse> {
     const investorSecret = this.signingKeys.investorSecret();
-    const nonce = await this.nonceService.next(COUPON_ENGINE(), dto.investorAddress);
 
     const { result, transactionHash } = await this.contractService.invokeContractMethod(
       COUPON_ENGINE(), 'claim_credits', investorSecret,
@@ -188,7 +184,7 @@ export class BondsService {
         Address.fromString(dto.investorAddress).toScVal(),
         nativeToScVal(BigInt(id), { type: 'u64' }),
       ],
-      nonce,
+      dto.investorAddress,
     );
 
     return {
@@ -201,7 +197,6 @@ export class BondsService {
 
   async transfer(id: number, dto: TransferBondDto): Promise<TransferResponse> {
     const investorSecret = this.signingKeys.investorSecret();
-    const nonce = await this.nonceService.next(BOND_ISSUER(), dto.fromAddress);
 
     const { transactionHash } = await this.contractService.invokeContractMethod(
       BOND_ISSUER(), 'transfer', investorSecret,
@@ -211,7 +206,7 @@ export class BondsService {
         nativeToScVal(BigInt(id), { type: 'u64' }),
         nativeToScVal(BigInt(dto.amount), { type: 'i128' }),
       ],
-      nonce,
+      dto.fromAddress,
     );
 
     await this.redis.sAdd(`bond:${id}:holders`, dto.toAddress);
@@ -240,7 +235,6 @@ export class BondsService {
   async sweepUndistributed(id: number): Promise<SweepUndistributedResponse> {
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
-    const nonce = await this.nonceService.next(COUPON_ENGINE(), adminAddress);
 
     const { result, transactionHash } = await this.contractService.invokeContractMethod(
       COUPON_ENGINE(), 'sweep_undistributed', adminSecret,
@@ -248,7 +242,7 @@ export class BondsService {
         Address.fromString(adminAddress).toScVal(),
         nativeToScVal(BigInt(id), { type: 'u64' }),
       ],
-      nonce,
+      adminAddress,
     );
 
     return {
@@ -261,13 +255,12 @@ export class BondsService {
   async mature(id: number): Promise<BondResponse> {
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
-    const nonce = await this.nonceService.next(BOND_ISSUER(), adminAddress);
 
     try {
       await this.contractService.invokeContractMethod(
         BOND_ISSUER(), 'mature_bond', adminSecret,
         [Address.fromString(adminAddress).toScVal(), nativeToScVal(BigInt(id), { type: 'u64' })],
-        nonce,
+        adminAddress,
       );
     } catch (error) {
       throw this.mapBondError(error, id);

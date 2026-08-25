@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, GatewayTimeoutException } from '@nestjs/common';
 import {
   rpc,
   TransactionBuilder,
@@ -12,6 +12,7 @@ import {
   xdr,
 } from '@stellar/stellar-sdk';
 import { StellarService } from './stellar.service';
+import { NonceService } from '../common/services/nonce.service';
 
 export interface ContractCallOptions {
   contractAddress: string;
@@ -30,7 +31,10 @@ export interface ContractCallResult {
 export class ContractService {
   private sorobanRpc: rpc.Server;
 
-  constructor(private readonly stellarService: StellarService) {
+  constructor(
+    private readonly stellarService: StellarService,
+    private readonly nonceService: NonceService,
+  ) {
     this.sorobanRpc = new rpc.Server(
       process.env.SOROBAN_RPC_URL || 'http://localhost:8000/soroban/rpc',
       { allowHttp: true },
@@ -124,8 +128,15 @@ export class ContractService {
         throw new BadRequestException(errorMessage);
       }
 
+      const transactionResult = await this.pollTransaction(response.hash);
+      if (transactionResult.status !== 'SUCCESS') {
+        throw new BadRequestException(
+          `Contract transaction failed with status ${transactionResult.status}: ${this.describeTransactionFailure(transactionResult)}`,
+        );
+      }
+
       return {
-        result: simulation.result?.retval ?? xdr.ScVal.scvVoid(),
+        result: transactionResult.returnValue ?? xdr.ScVal.scvVoid(),
         transactionHash: response.hash,
         successful: true,
       };
@@ -137,6 +148,42 @@ export class ContractService {
         `Failed to submit contract transaction: ${error.message}`,
       );
     }
+  }
+
+  private async pollTransaction(hash: string): Promise<any> {
+    const intervalMs = this.positiveInteger(process.env.SOROBAN_POLL_INTERVAL_MS, 1_000);
+    const timeoutMs = this.positiveInteger(process.env.SOROBAN_POLL_TIMEOUT_MS, 120_000);
+    const deadline = Date.now() + timeoutMs;
+    const retryable = new Set(['NOT_FOUND', 'PENDING', 'DUPLICATE', 'TRY_AGAIN_LATER']);
+
+    while (Date.now() <= deadline) {
+      const transaction = await this.sorobanRpc.getTransaction(hash) as any;
+      if (!retryable.has(transaction.status)) {
+        return transaction;
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+
+    throw new GatewayTimeoutException(
+      `Timed out waiting for Soroban transaction ${hash} after ${timeoutMs}ms`,
+    );
+  }
+
+  private describeTransactionFailure(transaction: any): string {
+    const diagnosticCode = this.extractContractErrorCode(
+      transaction.errorResult,
+      transaction.diagnosticEventsXdr,
+    );
+    if (diagnosticCode !== undefined) {
+      return `${transaction.errorResult || 'contract execution failed'} (contract error code ${diagnosticCode})`;
+    }
+    const resultMeta = transaction.resultMetaXdr?.toString?.();
+    return transaction.errorResult || resultMeta || 'no contract error details available';
+  }
+
+  private positiveInteger(value: string | undefined, fallback: number): number {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
   }
 
   encodeArg(value: unknown, type: string): xdr.ScVal {
@@ -192,7 +239,7 @@ export class ContractService {
     method: string,
     callerSecretKey: string,
     args: unknown[],
-    nonce: number,
+    nonceAddress: string,
   ): Promise<ContractCallResult> {
     const encodedArgs = args.map((arg) => {
       if (arg instanceof xdr.ScVal) {
@@ -201,15 +248,24 @@ export class ContractService {
       return nativeToScVal(arg);
     });
 
-    const nonceScVal = nativeToScVal(BigInt(nonce), { type: 'u64' });
-    const allArgs = [...encodedArgs, nonceScVal];
-
-    return this.sendTransaction({
+    return this.nonceService.withNonce(
       contractAddress,
-      method,
-      args: allArgs,
-      sourceSecretKey: callerSecretKey,
-    });
+      nonceAddress,
+      async () => {
+        const value = await this.simulateCall({
+          contractAddress,
+          method: 'get_nonce',
+          args: [Address.fromString(nonceAddress).toScVal()],
+        });
+        return Number(scValToNative(value));
+      },
+      (nonce) => this.sendTransaction({
+        contractAddress,
+        method,
+        args: [...encodedArgs, nativeToScVal(BigInt(nonce), { type: 'u64' })],
+        sourceSecretKey: callerSecretKey,
+      }),
+    );
   }
 
   private describeSimulationError(

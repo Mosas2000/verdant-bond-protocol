@@ -1,20 +1,24 @@
 import {
   Controller, Get, Post, Body, Param, Query,
-  HttpCode, HttpStatus, ParseIntPipe,
+  HttpCode, HttpStatus, ParseIntPipe, UseGuards, Req,
 } from '@nestjs/common';
 import { ProjectsService } from './projects.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { ProjectResponse } from './interfaces/project.interface';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { AdminGuard } from '../common/guards/admin.guard';
+import { AuthenticatedRequest } from '../common/interfaces/authenticated-request.interface';
 
 @Controller('projects')
 export class ProjectsController {
   constructor(private readonly projectsService: ProjectsService) {}
 
   @Post()
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.CREATED)
-  async register(@Body() dto: CreateProjectDto): Promise<ProjectResponse> {
-    return this.projectsService.register(dto, '');
+  async register(@Body() dto: CreateProjectDto, @Req() req: AuthenticatedRequest): Promise<ProjectResponse> {
+    return this.projectsService.register(dto, req.user.walletAddress);
   }
 
   @Get()
@@ -30,6 +34,7 @@ export class ProjectsController {
   }
 
   @Post(':id/approve')
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @HttpCode(HttpStatus.OK)
   async approve(
     @Param('id', ParseIntPipe) id: number,
@@ -38,6 +43,7 @@ export class ProjectsController {
   }
 
   @Post(':id/reject')
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @HttpCode(HttpStatus.OK)
   async reject(
     @Param('id', ParseIntPipe) id: number,
