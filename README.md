@@ -771,7 +771,9 @@ DEFAULT_PROVIDER_ADDRESS=G...                  # Default provider used by the sc
 
 # ── Authentication ───────────────────────────────────────────────
 JWT_SECRET=your_very_long_jwt_secret_here
-JWT_EXPIRY=7d
+JWT_EXPIRY=15m
+JWT_REFRESH_SECRET=your_very_long_refresh_jwt_secret_here
+JWT_REFRESH_EXPIRY=7d
 KYC_PROVIDER_URL=https://kyc.your-provider.com
 KYC_API_KEY=your_kyc_api_key
 
