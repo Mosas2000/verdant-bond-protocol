@@ -1,11 +1,11 @@
 import { Injectable, inject } from '@angular/core';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { AuthService } from '../../auth/auth.service';
 import { WalletService } from '../../auth/wallet.service';
 import {
   Bond, Project, Order, PaginatedResponse,
-  SubscriptionResponse, CreateProjectDto, ListBondDto, BuyBondDto,
+  SubscriptionResponse, CreateProjectDto, CreateBondDto, OrderQueryParams, ListBondDto, BuyBondDto,
   ClaimCreditsResponse, TransferResponse,
   UndistributedTotalResponse, SweepUndistributedResponse,
   QuoteBalanceResponse, QuoteTransactionResponse,
@@ -41,7 +41,7 @@ export class ApiService {
     return this.http.get<Bond>(`/api/bonds/${id}`, { headers: this.headers() });
   }
 
-  issueBond(data: any): Observable<Bond> {
+  issueBond(data: CreateBondDto): Observable<Bond> {
     return this.http.post<Bond>('/api/bonds', data, { headers: this.headers() });
   }
 
@@ -101,11 +101,14 @@ export class ApiService {
     return this.http.post<Project>('/api/projects', data, { headers: this.headers() });
   }
 
-  getOrders(bondId?: number): Observable<PaginatedResponse<Order>> {
-    const params: any = {};
-    if (bondId) params.bondId = bondId;
+  getOrders(params: OrderQueryParams = {}): Observable<PaginatedResponse<Order>> {
+    let queryParams = new HttpParams();
+    if (params.bondId !== undefined) queryParams = queryParams.set('bondId', params.bondId);
+    if (params.status !== undefined) queryParams = queryParams.set('status', params.status);
+    if (params.page !== undefined) queryParams = queryParams.set('page', params.page);
+    if (params.limit !== undefined) queryParams = queryParams.set('limit', params.limit);
     return this.http.get<PaginatedResponse<Order>>('/api/marketplace/orders', {
-      params, headers: this.headers(),
+      params: queryParams, headers: this.headers(),
     });
   }
 

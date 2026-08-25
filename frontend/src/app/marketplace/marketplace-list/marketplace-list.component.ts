@@ -297,7 +297,7 @@ export class MarketplaceListComponent implements OnInit {
   private loadOrders(): void {
     this.loading.set(true);
     this.error.set('');
-    this.apiService.getOrders(this.filterBondId() ?? undefined).subscribe({
+    this.apiService.getOrders({ bondId: this.filterBondId() ?? undefined }).subscribe({
       next: (res) => {
         this.orders.set(res.data);
         this.loading.set(false);

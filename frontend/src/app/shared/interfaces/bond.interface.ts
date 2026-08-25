@@ -12,6 +12,15 @@ export interface Bond {
   createdAt: string;
 }
 
+export interface CreateBondDto {
+  projectId: string;
+  faceValue: number;
+  couponSchedule: number[];
+  creditType: Bond['creditType'];
+  maturityDate: number;
+  totalSupply: number;
+}
+
 export interface Project {
   id: number;
   name: string;
@@ -36,6 +45,13 @@ export interface Order {
   quoteAsset: QuoteAsset;
   status: 'Open' | 'PartiallyFilled' | 'Filled' | 'Cancelled' | 'Expired';
   createdAt: string;
+}
+
+export interface OrderQueryParams {
+  bondId?: number;
+  status?: Order['status'];
+  page?: number;
+  limit?: number;
 }
 
 export interface PaginatedResponse<T> {
