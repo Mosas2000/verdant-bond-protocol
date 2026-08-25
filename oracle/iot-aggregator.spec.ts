@@ -105,6 +105,27 @@ describe('aggregateIotProject', () => {
     expect(meanSoilCarbonDeltaPpm([READINGS[0]] as any)).toBeNull();
   });
 
+  it('floors carbon_sequestered at zero for a net soil-carbon loss period', async () => {
+    // NBS-SOIL-001 loses soil carbon over the period (4350 -> 4200 ppm),
+    // producing a negative delta. OracleConsumer.submit_report rejects
+    // carbon_sequestered < 0, so the report must clamp it to zero while
+    // still surfacing the raw negative delta in evidence for context.
+    const lossReadings = [
+      { ...READINGS[0], timestamp: '2025-02-15T06:00:00Z', metrics: { ...READINGS[0].metrics, soil_carbon_ppm: 4350 } },
+      { ...READINGS[0], timestamp: '2025-03-15T06:00:00Z', metrics: { ...READINGS[0].metrics, soil_carbon_ppm: 4200 } },
+    ];
+    const http = new MockHttpClient([{ status: 200, data: { readings: lossReadings } }]);
+    const report = await aggregateIotProject(
+      { ...PROJECT, device_ids: ['NBS-SOIL-001'] },
+      PERIOD,
+      { baseUrl: BASE_URL, http },
+    );
+
+    expect(report.evidence.soil_carbon_delta_ppm).toBe(-150);
+    expect(report.carbon_sequestered).toBe(0);
+    expect(report.carbon_sequestered).toBeGreaterThanOrEqual(0);
+  });
+
   it('throws IotSchemaError when a reading violates the schema', async () => {
     const http = new MockHttpClient([
       {
