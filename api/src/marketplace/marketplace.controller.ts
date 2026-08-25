@@ -4,6 +4,7 @@ import {
 } from '@nestjs/common';
 import { DexService } from './dex.service';
 import { LiquidityService } from './liquidity.service';
+import { StellarService } from '../stellar/stellar.service';
 import { ListBondDto } from './dto/list-bond.dto';
 import { BuyBondDto } from './dto/buy-bond.dto';
 import { DepositQuoteDto } from './dto/deposit-quote.dto';
@@ -24,6 +25,7 @@ export class MarketplaceController {
   constructor(
     private readonly dexService: DexService,
     private readonly liquidityService: LiquidityService,
+    private readonly stellarService: StellarService,
   ) {}
 
   @Get('orders')
@@ -68,6 +70,17 @@ export class MarketplaceController {
   ): Promise<QuoteBalanceResponse> {
     const address = req.headers['x-wallet-address'] as string || '';
     return this.dexService.getQuoteBalance(address, query.asset ?? 'USDC');
+  }
+
+  @Get('wallet-balance')
+  async getWalletBalance(
+    @Query() query: QuoteBalanceQueryDto,
+    @Req() req: any,
+  ): Promise<QuoteBalanceResponse> {
+    const address = req.headers['x-wallet-address'] as string || '';
+    const asset = query.asset ?? 'USDC';
+    const balanceStr = await this.stellarService.getBalance(address, asset);
+    return { address, asset, balance: Number(balanceStr) };
   }
 
   @Post('deposit')
