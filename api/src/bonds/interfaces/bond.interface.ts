@@ -30,6 +30,10 @@ export interface BondResponse {
   createdAt: string;
 }
 
+export interface HeldBondResponse extends BondResponse {
+  balance: number;
+}
+
 export interface SubscriptionResponse {
   bondId: number;
   investorAddress: string;
