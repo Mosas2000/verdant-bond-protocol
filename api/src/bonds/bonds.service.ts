@@ -12,6 +12,7 @@ import { ClaimCreditsDto } from './dto/claim-credits.dto';
 import { TransferBondDto } from './dto/transfer-bond.dto';
 import {
   BondResponse,
+  HeldBondResponse,
   SubscriptionResponse,
   HolderListResponse,
   CouponDistributionResponse,
@@ -111,6 +112,40 @@ export class BondsService {
     const bond = await this.buildBondResponse(id);
     await this.redis.setEx(`bond:${id}`, 300, JSON.stringify(bond));
     return bond;
+  }
+
+  async findHeldByAddress(address: string): Promise<HeldBondResponse[]> {
+    try {
+      Address.fromString(address);
+    } catch {
+      throw new BadRequestException('Invalid wallet address');
+    }
+
+    let total = 0;
+    try {
+      const countScVal = await this.contractService.simulateCall({
+        contractAddress: BOND_ISSUER(), method: 'bond_count', args: [],
+      });
+      total = Number(scValToNative(countScVal));
+    } catch {
+      return [];
+    }
+
+    const heldBonds: HeldBondResponse[] = [];
+    for (let id = 1; id <= total; id++) {
+      try {
+        const balanceScVal = await this.contractService.simulateCall({
+          contractAddress: BOND_ISSUER(), method: 'get_holder_balance',
+          args: [nativeToScVal(BigInt(id), { type: 'u64' }), Address.fromString(address).toScVal()],
+        });
+        const balance = Number(scValToNative(balanceScVal));
+        if (balance > 0) {
+          heldBonds.push({ ...(await this.findOne(id)), balance });
+        }
+      } catch {}
+    }
+
+    return heldBonds;
   }
 
   async subscribe(id: number, dto: SubscribeDto): Promise<SubscriptionResponse> {
