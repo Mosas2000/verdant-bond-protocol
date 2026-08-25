@@ -14,6 +14,7 @@ pub enum BondError {
     Overflow = 9,
     ReportNotVerified = 10,
     InvalidReport = 11,
+    InvalidSupply = 12,
 }
 
 #[derive(Clone, Debug, PartialEq)]

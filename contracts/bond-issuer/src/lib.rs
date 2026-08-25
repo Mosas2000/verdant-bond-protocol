@@ -1,7 +1,7 @@
 #![no_std]
 #![allow(deprecated)]
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
 use nbbs_shared::{BondConfig, BondError, BondStatus};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
 
 pub const MAX_SUPPLY: i128 = 1_000_000_000_000_000_000;
 
@@ -12,6 +12,7 @@ pub enum DataKey {
     BondConfig(u64),
     BondState(u64),
     HolderBalance(u64, Address),
+    RedemptionPool(u64),
     BondCount,
     Nonce(Address),
 }
@@ -36,6 +37,21 @@ fn require_admin(env: &Env, caller: &Address) -> Result<(), BondError> {
     Ok(())
 }
 
+fn consume_nonce(env: &Env, addr: &Address, nonce: u64) -> Result<(), BondError> {
+    let expected_nonce: u64 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::Nonce(addr.clone()))
+        .unwrap_or(0);
+    if nonce != expected_nonce {
+        return Err(BondError::InvalidNonce);
+    }
+    env.storage()
+        .persistent()
+        .set(&DataKey::Nonce(addr.clone()), &(expected_nonce + 1));
+    Ok(())
+}
+
 #[contract]
 pub struct BondIssuer;
 
@@ -45,6 +61,28 @@ impl BondIssuer {
         env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
+    pub fn set_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), BondError> {
+        current_admin.require_auth();
+        require_admin(&env, &current_admin)?;
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.events().publish(
+            (Symbol::new(&env, "admin_changed"),),
+            (current_admin, new_admin),
+        );
+        Ok(())
+    }
+
+    pub fn get_admin(env: Env) -> Result<Address, BondError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(BondError::NotInitialized)
+    }
+
     pub fn issue_bond(
         env: Env,
         caller: Address,
@@ -52,26 +90,16 @@ impl BondIssuer {
         nonce: u64,
     ) -> Result<u64, BondError> {
         caller.require_auth();
-
-        let expected_nonce: u64 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Nonce(caller.clone()))
-            .unwrap_or(0);
-        if nonce != expected_nonce {
-            return Err(BondError::InvalidNonce);
-        }
-        env.storage()
-            .persistent()
-            .set(&DataKey::Nonce(caller.clone()), &(expected_nonce + 1));
-
+        consume_nonce(&env, &caller, nonce)?;
         require_admin(&env, &caller)?;
 
         if config.face_value <= 0 {
             return Err(BondError::ZeroAmount);
         }
-        if config.total_supply <= 0 {
-            return Err(BondError::ZeroAmount);
+        // Bound supply so downstream fixed-point coupon math can multiply
+        // supply by per-token precision without approaching i128 limits.
+        if config.total_supply <= 0 || config.total_supply > MAX_SUPPLY {
+            return Err(BondError::InvalidSupply);
         }
         if config.maturity_date <= env.ledger().timestamp() {
             return Err(BondError::Overflow);
@@ -94,9 +122,7 @@ impl BondIssuer {
             .get(&DataKey::BondCount)
             .unwrap_or(0);
         let bond_id = count + 1;
-        env.storage()
-            .instance()
-            .set(&DataKey::BondCount, &bond_id);
+        env.storage().instance().set(&DataKey::BondCount, &bond_id);
 
         env.storage()
             .instance()
@@ -127,18 +153,7 @@ impl BondIssuer {
         nonce: u64,
     ) -> Result<(), BondError> {
         investor.require_auth();
-
-        let expected_nonce: u64 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Nonce(investor.clone()))
-            .unwrap_or(0);
-        if nonce != expected_nonce {
-            return Err(BondError::InvalidNonce);
-        }
-        env.storage()
-            .persistent()
-            .set(&DataKey::Nonce(investor.clone()), &(expected_nonce + 1));
+        consume_nonce(&env, &investor, nonce)?;
 
         if amount <= 0 {
             return Err(BondError::ZeroAmount);
@@ -173,17 +188,11 @@ impl BondIssuer {
         }
 
         let balance_key = DataKey::HolderBalance(bond_id, investor.clone());
-        let current_balance: i128 = env
-            .storage()
-            .persistent()
-            .get(&balance_key)
-            .unwrap_or(0);
+        let current_balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
         let new_balance = current_balance
             .checked_add(amount)
             .ok_or(BondError::Overflow)?;
-        env.storage()
-            .persistent()
-            .set(&balance_key, &new_balance);
+        env.storage().persistent().set(&balance_key, &new_balance);
 
         state.total_subscribed = new_total;
         env.storage()
@@ -204,8 +213,10 @@ impl BondIssuer {
         to: Address,
         bond_id: u64,
         amount: i128,
+        nonce: u64,
     ) -> Result<(), BondError> {
         from.require_auth();
+        consume_nonce(&env, &from, nonce)?;
 
         if to == from {
             return Err(BondError::Unauthorized);
@@ -234,11 +245,7 @@ impl BondIssuer {
         }
 
         let from_key = DataKey::HolderBalance(bond_id, from.clone());
-        let from_balance: i128 = env
-            .storage()
-            .persistent()
-            .get(&from_key)
-            .unwrap_or(0);
+        let from_balance: i128 = env.storage().persistent().get(&from_key).unwrap_or(0);
         if from_balance < amount {
             return Err(BondError::InsufficientSupply);
         }
@@ -246,28 +253,48 @@ impl BondIssuer {
         let new_from_balance = from_balance
             .checked_sub(amount)
             .ok_or(BondError::Overflow)?;
-        env.storage()
-            .persistent()
-            .set(&from_key, &new_from_balance);
+        env.storage().persistent().set(&from_key, &new_from_balance);
 
         let to_key = DataKey::HolderBalance(bond_id, to.clone());
-        let to_balance: i128 = env
-            .storage()
-            .persistent()
-            .get(&to_key)
-            .unwrap_or(0);
-        let new_to_balance = to_balance
-            .checked_add(amount)
-            .ok_or(BondError::Overflow)?;
-        env.storage()
-            .persistent()
-            .set(&to_key, &new_to_balance);
+        let to_balance: i128 = env.storage().persistent().get(&to_key).unwrap_or(0);
+        let new_to_balance = to_balance.checked_add(amount).ok_or(BondError::Overflow)?;
+        env.storage().persistent().set(&to_key, &new_to_balance);
 
         env.events().publish(
             (Symbol::new(&env, "transferred"),),
             (bond_id, from, to, amount),
         );
 
+        Ok(())
+    }
+
+    pub fn fund_redemption(
+        env: Env,
+        caller: Address,
+        bond_id: u64,
+        amount: i128,
+        nonce: u64,
+    ) -> Result<(), BondError> {
+        caller.require_auth();
+        consume_nonce(&env, &caller, nonce)?;
+        require_admin(&env, &caller)?;
+        if amount <= 0 {
+            return Err(BondError::ZeroAmount);
+        }
+        let _config: BondConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::BondConfig(bond_id))
+            .ok_or(BondError::BondNotFound)?;
+
+        let key = DataKey::RedemptionPool(bond_id);
+        let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+        let next = current.checked_add(amount).ok_or(BondError::Overflow)?;
+        env.storage().persistent().set(&key, &next);
+        env.events().publish(
+            (Symbol::new(&env, "redemption_funded"),),
+            (bond_id, caller, amount),
+        );
         Ok(())
     }
 
@@ -279,18 +306,7 @@ impl BondIssuer {
         nonce: u64,
     ) -> Result<(), BondError> {
         holder.require_auth();
-
-        let expected_nonce: u64 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Nonce(holder.clone()))
-            .unwrap_or(0);
-        if nonce != expected_nonce {
-            return Err(BondError::InvalidNonce);
-        }
-        env.storage()
-            .persistent()
-            .set(&DataKey::Nonce(holder.clone()), &(expected_nonce + 1));
+        consume_nonce(&env, &holder, nonce)?;
 
         if amount <= 0 {
             return Err(BondError::ZeroAmount);
@@ -301,27 +317,35 @@ impl BondIssuer {
             .instance()
             .get(&DataKey::BondState(bond_id))
             .ok_or(BondError::BondNotFound)?;
+        let config: BondConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::BondConfig(bond_id))
+            .ok_or(BondError::BondNotFound)?;
 
         if state.status != BondStatus::Matured {
             return Err(BondError::BondAlreadyMatured);
         }
 
         let balance_key = DataKey::HolderBalance(bond_id, holder.clone());
-        let current_balance: i128 = env
-            .storage()
-            .persistent()
-            .get(&balance_key)
-            .unwrap_or(0);
+        let current_balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
         if current_balance < amount {
             return Err(BondError::InsufficientSupply);
         }
+        let payout = amount
+            .checked_mul(config.face_value)
+            .ok_or(BondError::Overflow)?;
+        let pool_key = DataKey::RedemptionPool(bond_id);
+        let pool: i128 = env.storage().persistent().get(&pool_key).unwrap_or(0);
+        if pool < payout {
+            return Err(BondError::InsufficientSupply);
+        }
+        env.storage().persistent().set(&pool_key, &(pool - payout));
 
         let new_balance = current_balance
             .checked_sub(amount)
             .ok_or(BondError::Overflow)?;
-        env.storage()
-            .persistent()
-            .set(&balance_key, &new_balance);
+        env.storage().persistent().set(&balance_key, &new_balance);
 
         state.total_subscribed = state
             .total_subscribed
@@ -333,7 +357,7 @@ impl BondIssuer {
 
         env.events().publish(
             (Symbol::new(&env, "redeemed"),),
-            (bond_id, holder, amount),
+            (bond_id, holder, amount, payout),
         );
 
         Ok(())
@@ -357,6 +381,20 @@ impl BondIssuer {
         env.storage()
             .persistent()
             .get(&DataKey::HolderBalance(bond_id, holder))
+            .unwrap_or(0)
+    }
+
+    pub fn get_redemption_pool(env: Env, bond_id: u64) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::RedemptionPool(bond_id))
+            .unwrap_or(0)
+    }
+
+    pub fn get_nonce(env: Env, address: Address) -> u64 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Nonce(address))
             .unwrap_or(0)
     }
 
@@ -392,19 +430,7 @@ impl BondIssuer {
         nonce: u64,
     ) -> Result<(), BondError> {
         caller.require_auth();
-
-        let expected_nonce: u64 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Nonce(caller.clone()))
-            .unwrap_or(0);
-        if nonce != expected_nonce {
-            return Err(BondError::InvalidNonce);
-        }
-        env.storage()
-            .persistent()
-            .set(&DataKey::Nonce(caller.clone()), &(expected_nonce + 1));
-
+        consume_nonce(&env, &caller, nonce)?;
         require_admin(&env, &caller)?;
 
         let config: BondConfig = env
@@ -432,10 +458,8 @@ impl BondIssuer {
             .instance()
             .set(&DataKey::BondState(bond_id), &state);
 
-        env.events().publish(
-            (Symbol::new(&env, "bond_matured"),),
-            (bond_id,),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "bond_matured"),), (bond_id,));
 
         Ok(())
     }
@@ -510,6 +534,45 @@ mod test {
 
         let result = client.try_issue_bond(&admin, &config, &0);
         assert_eq!(result, Err(Ok(BondError::ZeroAmount)));
+    }
+
+    #[test]
+    fn test_issue_bond_enforces_supply_bounds() {
+        let (env, client, admin, _user) = setup();
+
+        let mut max_config = make_config(&env);
+        max_config.total_supply = MAX_SUPPLY;
+        assert_eq!(client.issue_bond(&admin, &max_config, &0), 1);
+
+        let mut above_max = make_config(&env);
+        above_max.total_supply = MAX_SUPPLY + 1;
+        assert_eq!(
+            client.try_issue_bond(&admin, &above_max, &1),
+            Err(Ok(BondError::InvalidSupply))
+        );
+
+        let mut zero = make_config(&env);
+        zero.total_supply = 0;
+        assert_eq!(
+            client.try_issue_bond(&admin, &zero, &2),
+            Err(Ok(BondError::InvalidSupply))
+        );
+    }
+
+    #[test]
+    fn test_admin_rotation_gates_admin_functions() {
+        let (env, client, admin, _user) = setup();
+        let new_admin = Address::generate(&env);
+        let config = make_config(&env);
+
+        client.set_admin(&admin, &new_admin);
+        assert_eq!(client.get_admin(), new_admin);
+
+        assert_eq!(
+            client.try_issue_bond(&admin, &config, &0),
+            Err(Ok(BondError::Unauthorized))
+        );
+        assert_eq!(client.issue_bond(&new_admin, &config, &0), 1);
     }
 
     #[test]
@@ -618,7 +681,7 @@ mod test {
         client.subscribe(&user, &bond_id, &1000, &0);
         env.ledger().set_timestamp(config.maturity_date);
 
-        let result = client.try_transfer(&user, &user2, &bond_id, &100);
+        let result = client.try_transfer(&user, &user2, &bond_id, &100, &1);
         assert_eq!(result, Err(Ok(BondError::BondAlreadyMatured)));
     }
 
@@ -631,6 +694,7 @@ mod test {
         client.subscribe(&user, &bond_id, &3000, &0);
         env.ledger().set_timestamp(config.maturity_date);
         client.mature_bond(&admin, &bond_id, &1);
+        client.fund_redemption(&admin, &bond_id, &1_000_000, &2);
 
         client.redeem(&user, &bond_id, &1000, &1);
 
@@ -639,6 +703,24 @@ mod test {
 
         let state = client.get_bond_state(&bond_id);
         assert_eq!(state.total_subscribed, 2000);
+        assert_eq!(client.get_redemption_pool(&bond_id), 0);
+    }
+
+    #[test]
+    fn test_redeem_requires_funded_principal_pool() {
+        let (env, client, admin, user) = setup();
+        let config = make_config(&env);
+        let bond_id = client.issue_bond(&admin, &config, &0);
+
+        client.subscribe(&user, &bond_id, &1000, &0);
+        env.ledger().set_timestamp(config.maturity_date);
+        client.mature_bond(&admin, &bond_id, &1);
+        client.fund_redemption(&admin, &bond_id, &999_999, &2);
+
+        let result = client.try_redeem(&user, &bond_id, &1000, &1);
+        assert_eq!(result, Err(Ok(BondError::InsufficientSupply)));
+        assert_eq!(client.get_holder_balance(&bond_id, &user), 1000);
+        assert_eq!(client.get_redemption_pool(&bond_id), 999_999);
     }
 
     #[test]
@@ -723,13 +805,27 @@ mod test {
         let bond_id = client.issue_bond(&admin, &config, &0);
 
         client.subscribe(&user, &bond_id, &1000, &0);
-        client.transfer(&user, &user2, &bond_id, &600);
+        client.transfer(&user, &user2, &bond_id, &600, &1);
 
         assert_eq!(client.get_holder_balance(&bond_id, &user), 400);
         assert_eq!(client.get_holder_balance(&bond_id, &user2), 600);
 
         let state = client.get_bond_state(&bond_id);
         assert_eq!(state.total_subscribed, 1000);
+    }
+
+    #[test]
+    fn test_transfer_reused_nonce_is_rejected() {
+        let (env, client, admin, user) = setup();
+        let user2 = Address::generate(&env);
+        let config = make_config(&env);
+        let bond_id = client.issue_bond(&admin, &config, &0);
+
+        client.subscribe(&user, &bond_id, &1000, &0);
+        client.transfer(&user, &user2, &bond_id, &100, &1);
+
+        let result = client.try_transfer(&user, &user2, &bond_id, &100, &1);
+        assert_eq!(result, Err(Ok(BondError::InvalidNonce)));
     }
 
     #[test]
@@ -741,7 +837,7 @@ mod test {
 
         client.subscribe(&user, &bond_id, &1000, &0);
         client.subscribe(&user2, &bond_id, &500, &0);
-        client.transfer(&user, &user2, &bond_id, &250);
+        client.transfer(&user, &user2, &bond_id, &250, &1);
 
         assert_eq!(client.get_holder_balance(&bond_id, &user), 750);
         assert_eq!(client.get_holder_balance(&bond_id, &user2), 750);
@@ -756,7 +852,7 @@ mod test {
 
         client.subscribe(&user, &bond_id, &500, &0);
 
-        let result = client.try_transfer(&user, &user2, &bond_id, &600);
+        let result = client.try_transfer(&user, &user2, &bond_id, &600, &1);
         assert_eq!(result, Err(Ok(BondError::InsufficientSupply)));
     }
 
@@ -767,7 +863,7 @@ mod test {
         let config = make_config(&env);
         let bond_id = client.issue_bond(&admin, &config, &0);
 
-        let result = client.try_transfer(&user2, &Address::generate(&env), &bond_id, &100);
+        let result = client.try_transfer(&user2, &Address::generate(&env), &bond_id, &100, &0);
         assert_eq!(result, Err(Ok(BondError::InsufficientSupply)));
     }
 
@@ -779,7 +875,7 @@ mod test {
 
         client.subscribe(&user, &bond_id, &500, &0);
 
-        let result = client.try_transfer(&user, &user, &bond_id, &100);
+        let result = client.try_transfer(&user, &user, &bond_id, &100, &1);
         assert_eq!(result, Err(Ok(BondError::Unauthorized)));
     }
 
@@ -792,7 +888,7 @@ mod test {
 
         client.subscribe(&user, &bond_id, &500, &0);
 
-        let result = client.try_transfer(&user, &user2, &bond_id, &0);
+        let result = client.try_transfer(&user, &user2, &bond_id, &0, &1);
         assert_eq!(result, Err(Ok(BondError::ZeroAmount)));
     }
 
@@ -800,7 +896,7 @@ mod test {
     fn test_transfer_nonexistent_bond() {
         let (_env, client, _admin, user) = setup();
         let user2 = Address::generate(&_env);
-        let result = client.try_transfer(&user, &user2, &999, &100);
+        let result = client.try_transfer(&user, &user2, &999, &100, &0);
         assert_eq!(result, Err(Ok(BondError::BondNotFound)));
     }
 
@@ -815,7 +911,7 @@ mod test {
         env.ledger().set_timestamp(config.maturity_date);
         client.mature_bond(&admin, &bond_id, &1);
 
-        let result = client.try_transfer(&user, &user2, &bond_id, &100);
+        let result = client.try_transfer(&user, &user2, &bond_id, &100, &1);
         assert_eq!(result, Err(Ok(BondError::BondAlreadyMatured)));
     }
 
@@ -828,7 +924,7 @@ mod test {
 
         client.subscribe(&user, &bond_id, &1000, &0);
         client.subscribe(&user2, &bond_id, &300, &0);
-        client.transfer(&user, &user2, &bond_id, &700);
+        client.transfer(&user, &user2, &bond_id, &700, &1);
 
         assert_eq!(client.get_holder_balance(&bond_id, &user), 300);
         assert_eq!(client.get_holder_balance(&bond_id, &user2), 1000);
@@ -910,12 +1006,14 @@ mod test {
                     let from = i % 3;
                     let to = (i + 1) % 3;
                     if amount <= balances[from] {
-                        client.transfer(&users[from], &users[to], &bond_id, &amount);
+                        client.transfer(&users[from], &users[to], &bond_id, &amount, &nonces[from]);
+                        nonces[from] += 1;
                         balances[from] -= amount;
                         balances[to] += amount;
                     } else {
                         let res =
-                            client.try_transfer(&users[from], &users[to], &bond_id, &amount);
+                            client.try_transfer(&users[from], &users[to], &bond_id, &amount, &nonces[from]);
+                        nonces[from] += 1;
                         prop_assert_eq!(res, Err(Ok(BondError::InsufficientSupply)));
                     }
                     let sum: i128 = balances.iter().sum();
@@ -982,6 +1080,12 @@ mod test {
 
                 env.ledger().set_timestamp(config.maturity_date);
                 client.mature_bond(&admin, &bond_id, &1);
+                client.fund_redemption(
+                    &admin,
+                    &bond_id,
+                    &(total_subscribed * config.face_value),
+                    &2,
+                );
                 prop_assert_eq!(
                     client.get_bond_state(&bond_id).status,
                     BondStatus::Matured
@@ -989,7 +1093,7 @@ mod test {
 
                 let res = client.try_subscribe(&users[1], &bond_id, &1, &nonces[1]);
                 prop_assert_eq!(res, Err(Ok(BondError::BondAlreadyMatured)));
-                let res = client.try_transfer(&users[0], &users[1], &bond_id, &1);
+                let res = client.try_transfer(&users[0], &users[1], &bond_id, &1, &nonces[0]);
                 prop_assert_eq!(res, Err(Ok(BondError::BondAlreadyMatured)));
                 let res = client.try_mature_bond(&admin, &bond_id, &2);
                 prop_assert_eq!(res, Err(Ok(BondError::BondAlreadyMatured)));

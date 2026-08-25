@@ -7,12 +7,17 @@
 // Public functions
 pub fn issue_bond(...)
 pub fn subscribe(...)
-pub fn transfer(from, to, bond_id, amount)   // on-chain token transfer
+pub fn transfer(from, to, bond_id, amount, nonce)   // replay-protected on-chain token transfer
+pub fn fund_redemption(caller, bond_id, amount, nonce)  // admin funds principal escrow
 pub fn redeem(...)
 pub fn mature_bond(...)
+pub fn set_admin(current_admin, new_admin)
+pub fn get_admin()
 pub fn get_bond(...)
 pub fn get_bond_state(...)
 pub fn get_holder_balance(...)
+pub fn get_redemption_pool(...)
+pub fn get_nonce(holder)
 pub fn bond_count(...)
 ```
 
@@ -41,6 +46,8 @@ pub fn verify_report(...)            // independent verifier endorsement
 pub fn challenge_report(...)
 pub fn resolve_challenge(...)        // admin verdict; Rejected slashes 10% stake
 pub fn set_signature_threshold(...)  // required independent verifications
+pub fn set_admin(current_admin, new_admin)
+pub fn get_admin()
 pub fn get_report(...)
 pub fn get_provider(...)
 pub fn get_verification_count(...)
@@ -56,6 +63,8 @@ pub fn get_quote_balance(...)
 pub fn list_bond_tokens(...)
 pub fn execute_purchase(...)   // atomically transfers bonds + escrowed quote
 pub fn cancel_listing(...)
+pub fn set_admin(current_admin, new_admin)
+pub fn get_admin()
 pub fn get_order(...)
 pub fn get_orders_by_seller(...)
 ```
@@ -85,6 +94,7 @@ pub fn get_retired_balance(...)
 | BondIssuer | Bond(bond_id) | BondConfig | Bond configuration |
 | BondIssuer | HolderBalance(bond_id, holder) | i128 | Token balance |
 | BondIssuer | BondState(bond_id) | BondState | Current bond state |
+| BondIssuer | RedemptionPool(bond_id) | i128 | Escrowed face-value principal available for matured redemptions |
 | CouponEngine | Coupon(bond_id, period) | CouponData | Coupon distribution |
 | CouponEngine | Accrued(bond_id, holder) | i128 | Accrued credits |
 | CouponEngine | UndistributedTotal(bond_id) | i128 | Unallocated coupon dust |
@@ -109,6 +119,14 @@ CreditRetirement ──► CouponEngine (verify credit ownership)
 - A bond matures when the ledger timestamp reaches its `maturity_date` — `mature_bond` rejects calls made before that instant (`BondError::Overflow`).
 - Once the maturity date elapses, `subscribe` and `transfer` are rejected even if the bond has not yet been admin-matured, so the bond's outstanding supply is frozen on schedule.
 - `redeem` still requires the explicit `Matured` state, keeping redemption a deliberate admin-acknowledged step.
+- Before holders can redeem, the admin must call `fund_redemption` with enough escrowed principal to cover `amount * face_value`. `redeem` decrements the holder balance, total subscribed amount, and redemption pool atomically; if the pool is underfunded, the holder balance is left unchanged.
+- `BondConfig.total_supply` is capped by `MAX_SUPPLY` to keep downstream fixed-point coupon math inside safe `i128` bounds.
+
+## Admin Rotation
+
+- `BondIssuer`, `OracleConsumer`, and `DEXRouter` expose `set_admin(current_admin, new_admin)` and `get_admin()`.
+- `set_admin` requires authorization from the current admin address and emits `admin_changed`.
+- Production rotations should be scheduled through the Governance contract's timelock and executed by the current HSM-held admin key after review.
 
 ## Marketplace Settlement
 
