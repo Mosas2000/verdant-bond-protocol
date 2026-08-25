@@ -1,7 +1,7 @@
 #![no_std]
 #![allow(deprecated)]
-use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, Env, IntoVal, Symbol, Vec};
 use nbbs_shared::DEXError;
+use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, Env, IntoVal, Symbol, Vec};
 
 #[derive(Clone)]
 #[contracttype]
@@ -98,11 +98,7 @@ fn verify_holder_balance(
     let balance: i128 = env.invoke_contract(
         &bond_issuer,
         &Symbol::new(env, "get_holder_balance"),
-        vec![
-            &env,
-            bond_id.into_val(env),
-            holder.clone().into_val(env),
-        ],
+        vec![&env, bond_id.into_val(env), holder.clone().into_val(env)],
     );
 
     if balance < required {
@@ -130,6 +126,24 @@ impl DEXRouter {
         env.storage()
             .instance()
             .set(&DataKey::CouponEngineAddress, &coupon_engine_address);
+    }
+
+    pub fn set_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), DEXError> {
+        current_admin.require_auth();
+        require_admin(&env, &current_admin)?;
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.events().publish(
+            (Symbol::new(&env, "admin_changed"),),
+            (current_admin, new_admin),
+        );
+        Ok(())
+    }
+
+    pub fn get_admin(env: Env) -> Result<Address, DEXError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(DEXError::NotInitialized)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -242,9 +256,7 @@ impl DEXRouter {
             return Err(DEXError::Unauthorized);
         }
 
-        if order.status != OrderStatus::Open
-            && order.status != OrderStatus::PartiallyFilled
-        {
+        if order.status != OrderStatus::Open && order.status != OrderStatus::PartiallyFilled {
             return Err(DEXError::OrderAlreadyFilled);
         }
 
@@ -253,10 +265,8 @@ impl DEXRouter {
             .instance()
             .set(&DataKey::Order(order_id), &order);
 
-        env.events().publish(
-            (Symbol::new(&env, "order_cancelled"),),
-            (order_id, caller),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "order_cancelled"),), (order_id, caller));
 
         Ok(())
     }
@@ -283,9 +293,7 @@ impl DEXRouter {
             .get(&DataKey::Order(order_id))
             .ok_or(DEXError::OrderNotFound)?;
 
-        if order.status != OrderStatus::Open
-            && order.status != OrderStatus::PartiallyFilled
-        {
+        if order.status != OrderStatus::Open && order.status != OrderStatus::PartiallyFilled {
             return Err(DEXError::OrderAlreadyFilled);
         }
 
@@ -330,6 +338,11 @@ impl DEXRouter {
             .instance()
             .get(&DataKey::BondIssuerAddress)
             .ok_or(DEXError::NotInitialized)?;
+        let seller_bond_nonce: u64 = env.invoke_contract(
+            &bond_issuer,
+            &Symbol::new(&env, "get_nonce"),
+            vec![&env, order.seller.clone().into_val(&env)],
+        );
 
         env.invoke_contract::<()>(
             &bond_issuer,
@@ -340,6 +353,7 @@ impl DEXRouter {
                 buyer.clone().into_val(&env),
                 order.bond_id.into_val(&env),
                 amount.into_val(&env),
+                seller_bond_nonce.into_val(&env),
             ],
         );
 
@@ -465,11 +479,7 @@ impl DEXRouter {
             .unwrap_or(0)
     }
 
-    pub fn clean_expired_orders(
-        env: Env,
-        caller: Address,
-        nonce: u64,
-    ) -> Result<u32, DEXError> {
+    pub fn clean_expired_orders(env: Env, caller: Address, nonce: u64) -> Result<u32, DEXError> {
         caller.require_auth();
 
         let expected_nonce = get_nonce(&env, &caller);
@@ -501,10 +511,8 @@ impl DEXRouter {
             }
         }
 
-        env.events().publish(
-            (Symbol::new(&env, "expired_orders_cleaned"),),
-            (cleaned,),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "expired_orders_cleaned"),), (cleaned,));
 
         Ok(cleaned)
     }
@@ -561,12 +569,8 @@ mod test {
         holder_subscribe: i128,
     ) -> (Address, Address, u64, Address) {
         let issuer_admin = Address::generate(env);
-        let issuer_id = env.register(
-            nbbs_bond_issuer::BondIssuer,
-            (issuer_admin.clone(),),
-        );
-        let issuer_client =
-            nbbs_bond_issuer::BondIssuerClient::new(env, &issuer_id);
+        let issuer_id = env.register(nbbs_bond_issuer::BondIssuer, (issuer_admin.clone(),));
+        let issuer_client = nbbs_bond_issuer::BondIssuerClient::new(env, &issuer_id);
 
         let project_id = create_project_id(env, 1);
         let bond_config = nbbs_shared::BondConfig {
@@ -663,12 +667,14 @@ mod test {
         let order = client.get_order(&order_id);
         assert_eq!(order.status, OrderStatus::Filled);
 
-        let issuer_client =
-            nbbs_bond_issuer::BondIssuerClient::new(&env, &issuer_id);
+        let issuer_client = nbbs_bond_issuer::BondIssuerClient::new(&env, &issuer_id);
         assert_eq!(issuer_client.get_holder_balance(&bond_id, &seller), 4_000);
         assert_eq!(issuer_client.get_holder_balance(&bond_id, &buyer), 1_000);
 
-        assert_eq!(client.get_quote_balance(&buyer, &Symbol::new(&env, "USDC")), 0);
+        assert_eq!(
+            client.get_quote_balance(&buyer, &Symbol::new(&env, "USDC")),
+            0
+        );
         assert_eq!(
             client.get_quote_balance(&seller, &Symbol::new(&env, "USDC")),
             100_000
@@ -709,8 +715,7 @@ mod test {
         assert_eq!(order.status, OrderStatus::PartiallyFilled);
         assert_eq!(order.amount, 600);
 
-        let issuer_client =
-            nbbs_bond_issuer::BondIssuerClient::new(&env, &issuer_id);
+        let issuer_client = nbbs_bond_issuer::BondIssuerClient::new(&env, &issuer_id);
         assert_eq!(issuer_client.get_holder_balance(&bond_id, &seller), 4_600);
         assert_eq!(issuer_client.get_holder_balance(&bond_id, &buyer), 400);
 
@@ -731,7 +736,10 @@ mod test {
         assert_eq!(issuer_client.get_holder_balance(&bond_id, &seller), 4_000);
         assert_eq!(issuer_client.get_holder_balance(&bond_id, &buyer), 1_000);
 
-        assert_eq!(client.get_quote_balance(&buyer, &Symbol::new(&env, "USDC")), 0);
+        assert_eq!(
+            client.get_quote_balance(&buyer, &Symbol::new(&env, "USDC")),
+            0
+        );
         assert_eq!(
             client.get_quote_balance(&seller, &Symbol::new(&env, "USDC")),
             100_000
@@ -749,8 +757,7 @@ mod test {
         let (_issuer_admin, issuer_id, bond_id, seller) =
             setup_bond_and_holder(&env, 10_000, 1_000);
 
-        let issuer_client =
-            nbbs_bond_issuer::BondIssuerClient::new(&env, &issuer_id.clone());
+        let issuer_client = nbbs_bond_issuer::BondIssuerClient::new(&env, &issuer_id.clone());
 
         let contract_id = env.register(
             DEXRouter,
@@ -768,7 +775,7 @@ mod test {
             &0,
         );
 
-        issuer_client.transfer(&seller, &third_party, &bond_id, &1_000);
+        issuer_client.transfer(&seller, &third_party, &bond_id, &1_000, &1);
 
         client.deposit_quote(&buyer, &Symbol::new(&env, "USDC"), &100_000i128, &0);
 
@@ -784,7 +791,10 @@ mod test {
             client.get_quote_balance(&buyer, &Symbol::new(&env, "USDC")),
             100_000
         );
-        assert_eq!(client.get_quote_balance(&seller, &Symbol::new(&env, "USDC")), 0);
+        assert_eq!(
+            client.get_quote_balance(&seller, &Symbol::new(&env, "USDC")),
+            0
+        );
     }
 
     #[test]
@@ -797,8 +807,7 @@ mod test {
         let (_issuer_admin, issuer_id, bond_id, seller) =
             setup_bond_and_holder(&env, 10_000, 5_000);
 
-        let issuer_client =
-            nbbs_bond_issuer::BondIssuerClient::new(&env, &issuer_id.clone());
+        let issuer_client = nbbs_bond_issuer::BondIssuerClient::new(&env, &issuer_id.clone());
 
         let contract_id = env.register(
             DEXRouter,
@@ -862,7 +871,10 @@ mod test {
             client.get_quote_balance(&buyer, &Symbol::new(&env, "USDC")),
             50_000
         );
-        assert_eq!(client.get_quote_balance(&seller, &Symbol::new(&env, "USDC")), 0);
+        assert_eq!(
+            client.get_quote_balance(&seller, &Symbol::new(&env, "USDC")),
+            0
+        );
     }
 
     #[test]
@@ -875,7 +887,11 @@ mod test {
 
         let contract_id = env.register(
             DEXRouter,
-            (admin.clone(), Address::generate(&env), Address::generate(&env)),
+            (
+                admin.clone(),
+                Address::generate(&env),
+                Address::generate(&env),
+            ),
         );
         let client = DEXRouterClient::new(&env, &contract_id);
 
@@ -1061,7 +1077,11 @@ mod test {
 
         let contract_id = env.register(
             DEXRouter,
-            (admin.clone(), Address::generate(&env), Address::generate(&env)),
+            (
+                admin.clone(),
+                Address::generate(&env),
+                Address::generate(&env),
+            ),
         );
         let client = DEXRouterClient::new(&env, &contract_id);
 

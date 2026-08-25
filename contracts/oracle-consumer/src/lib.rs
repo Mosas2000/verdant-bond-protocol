@@ -132,6 +132,28 @@ impl OracleConsumer {
             .set(&DataKey::MinimumVerifierStake, &DEFAULT_MIN_VERIFIER_STAKE);
     }
 
+    pub fn set_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), OracleError> {
+        current_admin.require_auth();
+        require_admin(&env, &current_admin)?;
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.events().publish(
+            (Symbol::new(&env, "admin_changed"),),
+            (current_admin, new_admin),
+        );
+        Ok(())
+    }
+
+    pub fn get_admin(env: Env) -> Result<Address, OracleError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(OracleError::NotInitialized)
+    }
+
     pub fn register_provider(
         env: Env,
         caller: Address,
