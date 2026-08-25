@@ -6,18 +6,14 @@ import {
   SlippageResponse,
   OrderStatus,
 } from './interfaces/marketplace.interface';
-import { createClient, RedisClientType } from '@redis/client';
+import { RedisService } from '../common/services/redis.service';
 
 @Injectable()
 export class LiquidityService {
-  private redis: RedisClientType;
-
   constructor(
     private readonly dexService: DexService,
-  ) {
-    this.redis = createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
-    this.redis.connect().catch(() => {});
-  }
+    private readonly redis: RedisService,
+  ) {}
 
   async getPriceFeed(bondId?: number): Promise<PriceFeedResponse[]> {
     const cacheKey = `pricefeed:${bondId || 'all'}`;

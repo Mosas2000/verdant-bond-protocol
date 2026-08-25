@@ -7,6 +7,8 @@ import {
 import { ContractService } from '../stellar/contract.service';
 import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
+import { RedisService } from '../common/services/redis.service';
+import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { ListBondDto } from './dto/list-bond.dto';
 import { BuyBondDto } from './dto/buy-bond.dto';
 import { DepositQuoteDto } from './dto/deposit-quote.dto';
@@ -18,7 +20,6 @@ import {
   QuoteBalanceResponse,
   QuoteTransactionResponse,
 } from './interfaces/marketplace.interface';
-import { createClient, RedisClientType } from '@redis/client';
 import { nativeToScVal, scValToNative, Address } from '@stellar/stellar-sdk';
 import { PaginatedResponse } from '../common/dto/pagination.dto';
 
@@ -40,16 +41,13 @@ const DEX_ERROR_CODE = {
 
 @Injectable()
 export class DexService {
-  private redis: RedisClientType;
-
   constructor(
     private readonly contractService: ContractService,
     private readonly stellarService: StellarService,
     private readonly nonceService: NonceService,
-  ) {
-    this.redis = createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
-    this.redis.connect().catch(() => {});
-  }
+    private readonly redis: RedisService,
+    private readonly signingKeys: SigningKeyProvider,
+  ) {}
 
   async listOrders(
     bondId?: number,
@@ -61,40 +59,23 @@ export class DexService {
     const cached = await this.redis.get(cacheKey);
     if (cached) return JSON.parse(cached);
 
-    const orders: OrderResponse[] = [];
-    let index = 1;
-
-    while (true) {
-      try {
-        const orderScVal = await this.contractService.simulateCall({
-          contractAddress: DEX_ROUTER(),
-          method: 'get_order',
-          args: [nativeToScVal(BigInt(index), { type: 'u64' })],
-        });
-        const order = this.decodeOrder(scValToNative(orderScVal) as any[]);
-
-        if (bondId && order.bondId !== bondId) {
-          index++;
-          continue;
-        }
-        if (status && order.status !== status) {
-          index++;
-          continue;
-        }
-
-        orders.push(order);
-        index++;
-      } catch {
-        break;
-      }
-    }
-
+    const total = await this.getOrderCount();
+    const ids = Array.from({ length: total }, (_unused, idx) => idx + 1);
+    const matchingOrders = (await Promise.all(ids.map((id) => this.tryGetOrder(id))))
+      .filter((order): order is OrderResponse => Boolean(order))
+      .filter((order) => !bondId || order.bondId === bondId)
+      .filter((order) => !status || order.status === status);
     const start = (page - 1) * limit;
-    const paged = orders.slice(start, start + limit);
+    const paged = matchingOrders.slice(start, start + limit);
 
     const result = {
       data: paged,
-      meta: { page, limit, total: orders.length, totalPages: Math.ceil(orders.length / limit) || 1 },
+      meta: {
+        page,
+        limit,
+        total: matchingOrders.length,
+        totalPages: Math.ceil(matchingOrders.length / limit) || 1,
+      },
     };
 
     await this.redis.setEx(cacheKey, 30, JSON.stringify(result));
@@ -271,7 +252,29 @@ export class DexService {
   }
 
   private getAdminSecret(): string {
-    return process.env.ADMIN_SECRET_KEY || '';
+    return this.signingKeys.adminSecret();
+  }
+
+  private async getOrderCount(): Promise<number> {
+    const countScVal = await this.contractService.simulateCall({
+      contractAddress: DEX_ROUTER(),
+      method: 'order_count',
+      args: [],
+    });
+    return Number(scValToNative(countScVal));
+  }
+
+  private async tryGetOrder(id: number): Promise<OrderResponse | null> {
+    try {
+      const orderScVal = await this.contractService.simulateCall({
+        contractAddress: DEX_ROUTER(),
+        method: 'get_order',
+        args: [nativeToScVal(BigInt(id), { type: 'u64' })],
+      });
+      return this.decodeOrder(scValToNative(orderScVal) as any[]);
+    } catch {
+      return null;
+    }
   }
 
   private mapDexError(error: unknown): Error {

@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { createClient, RedisClientType } from '@redis/client';
+import { RedisService } from '../common/services/redis.service';
 import { ProjectsService } from '../projects/projects.service';
 import { OracleService } from './oracle.service';
 import {
@@ -37,15 +37,12 @@ function graceSeconds(): number {
 @Injectable()
 export class OracleMonitoringService {
   private readonly logger = new Logger(OracleMonitoringService.name);
-  private redis: RedisClientType;
 
   constructor(
     private readonly projectsService: ProjectsService,
     private readonly oracleService: OracleService,
-  ) {
-    this.redis = createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
-    this.redis.connect().catch(() => {});
-  }
+    private readonly redis: RedisService,
+  ) {}
 
   async computeStaleness(now: number = Date.now()): Promise<OracleStalenessReport> {
     const projects = await this.projectsService.findAll(1, 1000);

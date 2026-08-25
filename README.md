@@ -178,7 +178,7 @@ A bond issuer (project developer, green bank, or SPV) calls `BondIssuer.issue_bo
 Investors connect their Stellar wallets, pass KYC (handled off-chain via the NestJS API), and purchase bond tokens. Each token represents a pro-rata claim on the tranche. Minimum subscription is one token (fractional NbS exposure).
 
 #### Step 4 — Continuous Oracle Monitoring
-The oracle network continuously monitors carbon stock growth via satellite imagery, IoT sensors, and periodic third-party audits. Signed measurement reports are submitted on-chain to the `OracleConsumer` contract. A report only becomes `Verified` after **independent sources** endorse it: each verify call is recorded on-chain and counted against a configurable signature threshold, and a provider can never verify its own report. This multi-source consensus makes fabricated measurements economically and cryptographically impractical.
+The oracle network continuously monitors carbon stock growth via satellite imagery, IoT sensors, and periodic third-party audits. Signed measurement reports are submitted on-chain to the `OracleConsumer` contract. A report only becomes `Verified` after **independent qualifying sources** endorse it: each qualifying verify call is recorded on-chain and counted against a configurable signature threshold, providers must meet the configured minimum stake before their vote counts, and a provider can never verify its own report. This multi-source consensus makes fabricated measurements economically and cryptographically impractical.
 
 #### Step 5 — Coupon Calculation
 At each coupon date, the `CouponEngine` contract reads the verified oracle report **by its on-chain `report_id`** and calculates the total carbon credits earned by the project during that period. Reports that are not `Verified` are rejected, and the report's project must match the bond's registered project. Credits are allocated pro-rata to all bond token holders.
@@ -516,7 +516,7 @@ The integrity of this protocol depends entirely on the quality and trustworthine
 ### Oracle Security Model
 
 1. **Provider Whitelisting** — Only addresses registered by the protocol admin may submit reports to `OracleConsumer`
-2. **Multi-signature Validation** — High-value reports (backing bonds >$1M) require 2-of-3 provider signatures
+2. **Multi-signature Validation** — Reports default to a 2-signature verification threshold, and provider verifications count only when the provider is active and meets the configured minimum verifier stake
 3. **Challenge Window** — Any stakeholder may challenge a submitted report within 72 hours by submitting counter-evidence (IPFS hash)
 4. **Dispute Resolution** — Challenged reports are frozen pending review by the protocol's dispute committee; coupons are held in escrow during disputes
 5. **Staking & Slashing** — Providers commit staked collateral via `add_stake`; a challenge resolved to `Rejected` slashes **10%** of that stake, and a provider whose stake reaches zero is deactivated and loses whitelist status. Exonerated providers (`Verified` verdict) are not penalized.
@@ -667,7 +667,7 @@ Bond tokens and credit coupon tokens are standard **Stellar Assets**, making the
 
 ### Operational Security
 
-- All admin keys are held in hardware security modules (HSMs)
+- API signing keys are accessed through a `SigningKeyProvider` abstraction. Development may use env vars or the local file provider; production deployments should back this abstraction with KMS/HSM-backed signing before handling real custodial funds.
 - Multi-sig (3-of-5) required for protocol parameter changes
 - 48-hour timelock on all contract upgrades
 - Public bug bounty program (see [Security Disclosure](#-security-disclosure))
