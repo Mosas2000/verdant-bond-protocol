@@ -206,6 +206,107 @@ impl ProjectRegistry {
         Ok(())
     }
 
+    pub fn deactivate_project(
+        env: Env,
+        caller: Address,
+        project_id: u64,
+        nonce: u64,
+    ) -> Result<(), RegistryError> {
+        caller.require_auth();
+
+        let expected_nonce: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Nonce(caller.clone()))
+            .unwrap_or(0);
+        if nonce != expected_nonce {
+            return Err(RegistryError::InvalidNonce);
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::Nonce(caller.clone()), &(expected_nonce + 1));
+
+        require_admin(&env, &caller)?;
+
+        let key = project_id_to_bytes(&env, project_id);
+        let mut project: Project = env
+            .storage()
+            .instance()
+            .get(&DataKey::Project(key.clone()))
+            .ok_or(RegistryError::ProjectNotFound)?;
+
+        if project.status != ProjectStatus::Approved {
+            return Err(RegistryError::InvalidStatusTransition);
+        }
+
+        project.status = ProjectStatus::Inactive;
+        env.storage()
+            .instance()
+            .set(&DataKey::Project(key), &project);
+
+        Ok(())
+    }
+
+    pub fn resubmit_project(
+        env: Env,
+        caller: Address,
+        project_id: u64,
+        updated_ipfs_hash: BytesN<32>,
+        nonce: u64,
+    ) -> Result<(), RegistryError> {
+        caller.require_auth();
+
+        let expected_nonce: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Nonce(caller.clone()))
+            .unwrap_or(0);
+        if nonce != expected_nonce {
+            return Err(RegistryError::InvalidNonce);
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::Nonce(caller.clone()), &(expected_nonce + 1));
+
+        let key = project_id_to_bytes(&env, project_id);
+        let mut project: Project = env
+            .storage()
+            .instance()
+            .get(&DataKey::Project(key.clone()))
+            .ok_or(RegistryError::ProjectNotFound)?;
+
+        if project.owner != caller {
+            return Err(RegistryError::Unauthorized);
+        }
+
+        if project.status != ProjectStatus::Rejected {
+            return Err(RegistryError::InvalidStatusTransition);
+        }
+
+        project.metadata_ipfs_hash = updated_ipfs_hash;
+        project.status = ProjectStatus::Pending;
+        env.storage()
+            .instance()
+            .set(&DataKey::Project(key), &project);
+
+        Ok(())
+    }
+
+    pub fn has_approved_project(env: Env, key: BytesN<32>) -> bool {
+        match env
+            .storage()
+            .instance()
+            .get::<_, Project>(&DataKey::Project(key))
+        {
+            Some(project) => project.status == ProjectStatus::Approved,
+            None => false,
+        }
+    }
+
+    pub fn project_key(env: Env, project_id: u64) -> BytesN<32> {
+        project_id_to_bytes(&env, project_id)
+    }
+
     pub fn get_project(env: Env, project_id: u64) -> Result<Project, RegistryError> {
         let key = project_id_to_bytes(&env, project_id);
         env.storage()
@@ -625,5 +726,205 @@ mod test {
             &1,
         );
         assert_eq!(id2, 2);
+    }
+
+    #[test]
+    fn test_deactivate_project() {
+        let (env, client, admin, user) = setup();
+        let hash = create_hash(&env, 1);
+        let id = client.register_project(
+            &user,
+            &hash,
+            &Symbol::new(&env, "VCS"),
+            &Symbol::new(&env, "US"),
+            &0,
+        );
+        client.approve_project(&admin, &id, &0);
+        client.deactivate_project(&admin, &id, &1);
+        let project = client.get_project(&id);
+        assert_eq!(project.status, ProjectStatus::Inactive);
+    }
+
+    #[test]
+    fn test_deactivate_requires_admin() {
+        let (env, client, admin, user) = setup();
+        let hash = create_hash(&env, 1);
+        let id = client.register_project(
+            &user,
+            &hash,
+            &Symbol::new(&env, "VCS"),
+            &Symbol::new(&env, "US"),
+            &0,
+        );
+        client.approve_project(&admin, &id, &0);
+        let result = client.try_deactivate_project(&user, &id, &1);
+        assert_eq!(result, Err(Ok(RegistryError::Unauthorized)));
+    }
+
+    #[test]
+    fn test_deactivate_pending_fails() {
+        let (env, client, admin, user) = setup();
+        let hash = create_hash(&env, 1);
+        let id = client.register_project(
+            &user,
+            &hash,
+            &Symbol::new(&env, "VCS"),
+            &Symbol::new(&env, "US"),
+            &0,
+        );
+        let result = client.try_deactivate_project(&admin, &id, &0);
+        assert_eq!(result, Err(Ok(RegistryError::InvalidStatusTransition)));
+    }
+
+    #[test]
+    fn test_deactivate_rejected_fails() {
+        let (env, client, admin, user) = setup();
+        let hash = create_hash(&env, 1);
+        let id = client.register_project(
+            &user,
+            &hash,
+            &Symbol::new(&env, "VCS"),
+            &Symbol::new(&env, "US"),
+            &0,
+        );
+        client.reject_project(&admin, &id, &0);
+        let result = client.try_deactivate_project(&admin, &id, &1);
+        assert_eq!(result, Err(Ok(RegistryError::InvalidStatusTransition)));
+    }
+
+    #[test]
+    fn test_deactivate_already_inactive_fails() {
+        let (env, client, admin, user) = setup();
+        let hash = create_hash(&env, 1);
+        let id = client.register_project(
+            &user,
+            &hash,
+            &Symbol::new(&env, "VCS"),
+            &Symbol::new(&env, "US"),
+            &0,
+        );
+        client.approve_project(&admin, &id, &0);
+        client.deactivate_project(&admin, &id, &1);
+        let result = client.try_deactivate_project(&admin, &id, &2);
+        assert_eq!(result, Err(Ok(RegistryError::InvalidStatusTransition)));
+    }
+
+    #[test]
+    fn test_deactivate_not_found() {
+        let (_env, client, admin, _user) = setup();
+        let result = client.try_deactivate_project(&admin, &999, &0);
+        assert_eq!(result, Err(Ok(RegistryError::ProjectNotFound)));
+    }
+
+    #[test]
+    fn test_resubmit_project() {
+        let (env, client, admin, user) = setup();
+        let hash = create_hash(&env, 1);
+        let id = client.register_project(
+            &user,
+            &hash,
+            &Symbol::new(&env, "VCS"),
+            &Symbol::new(&env, "US"),
+            &0,
+        );
+        client.reject_project(&admin, &id, &0);
+        let new_hash = create_hash(&env, 2);
+        client.resubmit_project(&user, &id, &new_hash, &1);
+        let project = client.get_project(&id);
+        assert_eq!(project.status, ProjectStatus::Pending);
+        assert_eq!(project.metadata_ipfs_hash, new_hash);
+        assert_eq!(project.id, id);
+        assert_eq!(project.owner, user);
+    }
+
+    #[test]
+    fn test_resubmit_requires_owner() {
+        let (env, client, admin, user) = setup();
+        let other = Address::generate(&env);
+        let hash = create_hash(&env, 1);
+        let id = client.register_project(
+            &user,
+            &hash,
+            &Symbol::new(&env, "VCS"),
+            &Symbol::new(&env, "US"),
+            &0,
+        );
+        client.reject_project(&admin, &id, &0);
+        let new_hash = create_hash(&env, 2);
+        let result = client.try_resubmit_project(&other, &id, &new_hash, &0);
+        assert_eq!(result, Err(Ok(RegistryError::Unauthorized)));
+    }
+
+    #[test]
+    fn test_resubmit_pending_fails() {
+        let (env, client, _admin, user) = setup();
+        let hash = create_hash(&env, 1);
+        let id = client.register_project(
+            &user,
+            &hash,
+            &Symbol::new(&env, "VCS"),
+            &Symbol::new(&env, "US"),
+            &0,
+        );
+        let new_hash = create_hash(&env, 2);
+        let result = client.try_resubmit_project(&user, &id, &new_hash, &1);
+        assert_eq!(result, Err(Ok(RegistryError::InvalidStatusTransition)));
+    }
+
+    #[test]
+    fn test_resubmit_approved_fails() {
+        let (env, client, admin, user) = setup();
+        let hash = create_hash(&env, 1);
+        let id = client.register_project(
+            &user,
+            &hash,
+            &Symbol::new(&env, "VCS"),
+            &Symbol::new(&env, "US"),
+            &0,
+        );
+        client.approve_project(&admin, &id, &0);
+        let new_hash = create_hash(&env, 2);
+        let result = client.try_resubmit_project(&user, &id, &new_hash, &1);
+        assert_eq!(result, Err(Ok(RegistryError::InvalidStatusTransition)));
+    }
+
+    #[test]
+    fn test_has_approved_project() {
+        let (env, client, admin, user) = setup();
+        let hash = create_hash(&env, 1);
+        let id = client.register_project(
+            &user,
+            &hash,
+            &Symbol::new(&env, "VCS"),
+            &Symbol::new(&env, "US"),
+            &0,
+        );
+        let key = client.project_key(&id);
+        assert!(!client.has_approved_project(&key));
+        client.approve_project(&admin, &id, &0);
+        assert!(client.has_approved_project(&key));
+        client.deactivate_project(&admin, &id, &1);
+        assert!(!client.has_approved_project(&key));
+    }
+
+    #[test]
+    fn test_project_key() {
+        let (env, client, _admin, user) = setup();
+        let hash = create_hash(&env, 1);
+        let id = client.register_project(
+            &user,
+            &hash,
+            &Symbol::new(&env, "VCS"),
+            &Symbol::new(&env, "US"),
+            &0,
+        );
+        let key = client.project_key(&id);
+        // key should match internal encoding (first 8 bytes = id BE)
+        let expected = {
+            let mut arr = [0u8; 32];
+            arr[..8].copy_from_slice(&id.to_be_bytes());
+            BytesN::from_array(&env, &arr)
+        };
+        assert_eq!(key, expected);
     }
 }

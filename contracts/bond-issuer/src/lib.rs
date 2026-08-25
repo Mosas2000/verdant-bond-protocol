@@ -1,7 +1,7 @@
 #![no_std]
 #![allow(deprecated)]
 use nbbs_shared::{BondConfig, BondError, BondStatus};
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, Env, IntoVal, Symbol};
 
 pub const MAX_SUPPLY: i128 = 1_000_000_000_000_000_000;
 
@@ -15,6 +15,7 @@ pub enum DataKey {
     RedemptionPool(u64),
     BondCount,
     Nonce(Address),
+    ProjectRegistry,
 }
 
 #[derive(Clone, Debug)]
@@ -83,6 +84,23 @@ impl BondIssuer {
             .ok_or(BondError::NotInitialized)
     }
 
+    pub fn set_project_registry(
+        env: Env,
+        caller: Address,
+        registry: Address,
+        nonce: u64,
+    ) -> Result<(), BondError> {
+        caller.require_auth();
+        consume_nonce(&env, &caller, nonce)?;
+        require_admin(&env, &caller)?;
+
+        env.storage()
+            .instance()
+            .set(&DataKey::ProjectRegistry, &registry);
+
+        Ok(())
+    }
+
     pub fn issue_bond(
         env: Env,
         caller: Address,
@@ -113,6 +131,21 @@ impl BondIssuer {
             let coupon_date = config.coupon_schedule.get(i).unwrap();
             if coupon_date >= config.maturity_date {
                 return Err(BondError::ZeroAmount);
+            }
+        }
+
+        if let Some(registry) = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::ProjectRegistry)
+        {
+            let approved: bool = env.invoke_contract(
+                &registry,
+                &Symbol::new(&env, "has_approved_project"),
+                vec![&env, config.project_id.clone().into_val(&env)],
+            );
+            if !approved {
+                return Err(BondError::ProjectNotApproved);
             }
         }
 
