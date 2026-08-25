@@ -744,6 +744,8 @@ STELLAR_NETWORK=testnet                        # testnet | mainnet
 STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org
 SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
 STELLAR_PUBLIC_KEY=G...                        # Admin public key (used by deploy scripts)
+STELLAR_AUTH_SECRET_KEY=S...                    # Server key used to sign SEP-10 challenges
+STELLAR_HOME_DOMAIN=localhost:3000             # Domain embedded in the SEP-10 challenge
 
 # ── Signer Keys (used by the API to build transactions) ──────────
 ADMIN_SECRET_KEY=S...                          # Issuer/admin secret key
@@ -784,6 +786,21 @@ PORT=3000
 NODE_ENV=development
 LOG_LEVEL=debug
 ```
+
+### Wallet Authentication
+
+The login flow uses a SEP-10-style challenge transaction. The API creates a
+short-lived Stellar transaction containing a random nonce in a `ManageData`
+operation, binds it to the configured network passphrase and home domain, and
+signs it with `STELLAR_AUTH_SECRET_KEY`. Freighter signs that transaction
+envelope and returns base64 XDR. The API verifies that the envelope matches the
+stored challenge and contains valid signatures from both the server and the
+requested wallet before issuing a JWT. Raw Ed25519 signatures and envelopes
+from another Stellar network are rejected.
+
+`STELLAR_AUTH_SECRET_KEY` must belong to the server authentication account and
+must be kept private. `STELLAR_HOME_DOMAIN` should be the public host serving
+the authentication endpoint in deployed environments.
 
 ---
 

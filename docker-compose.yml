@@ -30,6 +30,8 @@ services:
     environment:
       STELLAR_NETWORK: testnet
       STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+      STELLAR_AUTH_SECRET_KEY: ${STELLAR_AUTH_SECRET_KEY}
+      STELLAR_HOME_DOMAIN: ${STELLAR_HOME_DOMAIN:-localhost:3000}
       DATABASE_URL: postgresql://nbs:nbs@postgres:5432/verdant_bond
       REDIS_URL: redis://redis:6379
     depends_on:

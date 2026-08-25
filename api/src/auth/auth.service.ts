@@ -1,6 +1,17 @@
-import { Injectable, BadRequestException, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  InternalServerErrorException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { Keypair } from '@stellar/stellar-sdk';
+import {
+  Account,
+  FeeBumpTransaction,
+  Keypair,
+  Operation,
+  TransactionBuilder,
+} from '@stellar/stellar-sdk';
 import * as crypto from 'crypto';
 import { RedisService } from '../common/services/redis.service';
 import { StellarService } from '../stellar/stellar.service';
@@ -23,7 +34,35 @@ export class AuthService {
     }
 
     const nonce = crypto.randomBytes(32).toString('hex');
-    const challenge = `Verdant Bond Protocol sign-in\nAddress: ${address}\nNonce: ${nonce}\nTimestamp: ${Date.now()}`;
+    const serverSecretKey = process.env.STELLAR_AUTH_SECRET_KEY || process.env.ADMIN_SECRET_KEY;
+    if (!serverSecretKey) {
+      throw new InternalServerErrorException('Missing Stellar authentication signing key');
+    }
+
+    let serverKeypair: Keypair;
+    try {
+      serverKeypair = Keypair.fromSecret(serverSecretKey);
+    } catch {
+      throw new InternalServerErrorException('Invalid Stellar authentication signing key');
+    }
+
+    const homeDomain = process.env.STELLAR_HOME_DOMAIN || 'localhost:3000';
+    const challengeTransaction = new TransactionBuilder(
+      new Account(serverKeypair.publicKey(), '0'),
+      {
+        fee: '100',
+        networkPassphrase: this.stellarService.getNetworkPassphrase(),
+      },
+    )
+      .addOperation(Operation.manageData({
+        name: `${homeDomain} auth`,
+        value: Buffer.from(nonce, 'hex'),
+        source: address,
+      }))
+      .setTimeout(300)
+      .build();
+    challengeTransaction.sign(serverKeypair);
+    const challenge = challengeTransaction.toXDR();
 
     await this.redis.set(`challenge:${address}`, challenge, { EX: 300 });
 
@@ -36,13 +75,41 @@ export class AuthService {
       throw new UnauthorizedException('Challenge not found or expired');
     }
 
-    const keypair = Keypair.fromPublicKey(dto.address);
-    const isValid = keypair.verify(
-      Buffer.from(dto.originalChallenge),
-      Buffer.from(dto.signedChallenge, 'hex'),
-    );
+    const serverSecretKey = process.env.STELLAR_AUTH_SECRET_KEY || process.env.ADMIN_SECRET_KEY;
+    if (!serverSecretKey) {
+      throw new InternalServerErrorException('Missing Stellar authentication signing key');
+    }
 
-    if (!isValid) {
+    try {
+      const serverKeypair = Keypair.fromSecret(serverSecretKey);
+      const originalTransaction = TransactionBuilder.fromXDR(
+        dto.originalChallenge,
+        this.stellarService.getNetworkPassphrase(),
+      );
+      const signedTransaction = TransactionBuilder.fromXDR(
+        dto.signedChallenge,
+        this.stellarService.getNetworkPassphrase(),
+      );
+      if (signedTransaction instanceof FeeBumpTransaction) {
+        throw new Error('Fee bump transactions are not valid auth challenges');
+      }
+      const transactionHash = signedTransaction.hash();
+      const hasSignature = (keypair: Keypair): boolean =>
+        signedTransaction.signatures.some((signature) =>
+          keypair.verify(transactionHash, signature.signature()),
+        );
+
+      if (
+        originalTransaction.hash().toString('hex') !== transactionHash.toString('hex') ||
+        signedTransaction.source !== serverKeypair.publicKey() ||
+        signedTransaction.operations.length !== 1 ||
+        signedTransaction.operations[0].source !== dto.address ||
+        !hasSignature(serverKeypair) ||
+        !hasSignature(Keypair.fromPublicKey(dto.address))
+      ) {
+        throw new Error('Invalid challenge transaction');
+      }
+    } catch {
       throw new UnauthorizedException('Invalid signature');
     }
 
