@@ -22,14 +22,15 @@ Register → Whitelisted → Submit Reports → Challenge Window → Verify/Reje
 ## Multi-Source Verification Threshold
 A report only reaches `Verified` status after **independent verifications** meet the configured threshold:
 
-- `set_signature_threshold(threshold)` sets the minimum number of distinct verifiers required (defaults to `1`).
-- Any admin or active provider may call `verify_report`. Each call records the verifier under `ReportVerifiers(report_id)` and increments `VerificationCount(report_id)`.
+- `set_signature_threshold(threshold)` sets the minimum number of distinct qualifying verifiers required (defaults to `2`).
+- `set_minimum_verifier_stake(stake)` sets the minimum active stake a provider must hold before its verification can count (defaults to `10_000`).
+- The admin may call `verify_report`; active providers may call it only when their stake is at or above the configured minimum. Each qualifying call records the verifier under `ReportVerifiers(report_id)` and increments `VerificationCount(report_id)`.
 - Verifying the **same** report twice by the same address is a no-op (deduplicated, no double counting).
 - A provider cannot verify its **own** report (`InvalidSignature`) — this guarantees the threshold represents genuinely independent sources.
 - A report whose status is no longer `Pending` (challenged, already verified) cannot be re-verified.
 - `get_report_verifiers(report_id)` and `get_verification_count(report_id)` expose the audit trail on-chain.
 
-The admin can verify a report and it counts toward the threshold, but the submitting provider's own signature never does.
+The admin can verify a report and it counts toward the threshold, but the submitting provider's own signature never does. Low-stake providers are rejected before their verification is recorded, so a self-registered provider cannot cheaply satisfy consensus for a colluding report.
 
 ## Challenge Mechanism
 - 72-hour window from submission
@@ -70,6 +71,6 @@ log-based staleness alerting described in
 - Provider whitelist (admin-managed)
 - Provider staking: committed collateral underwrites report quality; `add_stake` / `withdraw_stake` manage exposure
 - Slashing: a `Rejected` challenge resolution slashes 10% of stake; zero stake deactivates the provider
-- Signature threshold requires multiple independent sources for verification
+- Signature threshold defaults to two independent qualifying sources, with minimum verifier stake required for provider votes
 - Coupon distributions consume only `Verified` reports (enforced by `CouponEngine`)
 - Multi-sig for high-value reports

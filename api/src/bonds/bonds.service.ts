@@ -2,8 +2,9 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { ContractService } from '../stellar/contract.service';
 import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
+import { RedisService } from '../common/services/redis.service';
+import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { xdr, nativeToScVal, scValToNative, Address } from '@stellar/stellar-sdk';
-import { createClient, RedisClientType } from '@redis/client';
 import { CreateBondDto } from './dto/create-bond.dto';
 import { SubscribeDto } from './dto/subscribe.dto';
 import { DistributeCouponDto } from './dto/distribute-coupon.dto';
@@ -41,16 +42,13 @@ const BOND_ERROR_CODE = {
 
 @Injectable()
 export class BondsService {
-  private redis: RedisClientType;
-
   constructor(
     private readonly contractService: ContractService,
     private readonly stellarService: StellarService,
     private readonly nonceService: NonceService,
-  ) {
-    this.redis = createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
-    this.redis.connect().catch(() => {});
-  }
+    private readonly redis: RedisService,
+    private readonly signingKeys: SigningKeyProvider,
+  ) {}
 
   async create(dto: CreateBondDto): Promise<BondResponse> {
     const adminSecret = this.getAdminSecret();
@@ -116,7 +114,7 @@ export class BondsService {
   }
 
   async subscribe(id: number, dto: SubscribeDto): Promise<SubscriptionResponse> {
-    const investorSecret = process.env.INVESTOR_SECRET_KEY || '';
+    const investorSecret = this.signingKeys.investorSecret();
     const nonce = await this.nonceService.next(BOND_ISSUER(), dto.investorAddress);
     const { transactionHash } = await this.contractService.invokeContractMethod(
       BOND_ISSUER(), 'subscribe', investorSecret,
@@ -181,7 +179,7 @@ export class BondsService {
   }
 
   async claimCredits(id: number, dto: ClaimCreditsDto): Promise<ClaimCreditsResponse> {
-    const investorSecret = process.env.INVESTOR_SECRET_KEY || '';
+    const investorSecret = this.signingKeys.investorSecret();
     const nonce = await this.nonceService.next(COUPON_ENGINE(), dto.investorAddress);
 
     const { result, transactionHash } = await this.contractService.invokeContractMethod(
@@ -202,7 +200,7 @@ export class BondsService {
   }
 
   async transfer(id: number, dto: TransferBondDto): Promise<TransferResponse> {
-    const investorSecret = process.env.INVESTOR_SECRET_KEY || '';
+    const investorSecret = this.signingKeys.investorSecret();
     const nonce = await this.nonceService.next(BOND_ISSUER(), dto.fromAddress);
 
     const { transactionHash } = await this.contractService.invokeContractMethod(
@@ -348,6 +346,6 @@ export class BondsService {
   }
 
   private getAdminSecret(): string {
-    return process.env.ADMIN_SECRET_KEY || '';
+    return this.signingKeys.adminSecret();
   }
 }

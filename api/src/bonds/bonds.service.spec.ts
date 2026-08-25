@@ -20,6 +20,27 @@ import { BondsService } from './bonds.service';
 import { ContractService } from '../stellar/contract.service';
 import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
+import { RedisService } from '../common/services/redis.service';
+import { SigningKeyProvider } from '../common/services/signing-key.provider';
+
+const redisProvider = {
+  provide: RedisService,
+  useValue: {
+    get: jest.fn().mockResolvedValue(null),
+    setEx: jest.fn().mockResolvedValue(undefined),
+    del: jest.fn().mockResolvedValue(undefined),
+    sMembers: jest.fn().mockResolvedValue([]),
+    sAdd: jest.fn().mockResolvedValue(undefined),
+  },
+};
+
+const signingProvider = {
+  provide: SigningKeyProvider,
+  useValue: {
+    adminSecret: jest.fn().mockReturnValue('SADMIN'),
+    investorSecret: jest.fn().mockReturnValue('SINVESTOR'),
+  },
+};
 
 describe('BondsService', () => {
   let service: BondsService;
@@ -34,6 +55,8 @@ describe('BondsService', () => {
           provide: NonceService,
           useValue: { next: jest.fn().mockResolvedValue(0) },
         },
+        redisProvider,
+        signingProvider,
       ],
     }).compile();
 
@@ -93,6 +116,8 @@ describe('BondsService', () => {
             provide: NonceService,
             useValue: { next: jest.fn().mockResolvedValue(0) },
           },
+          redisProvider,
+          signingProvider,
         ],
       }).compile();
 
@@ -129,6 +154,8 @@ describe('BondsService', () => {
             provide: NonceService,
             useValue: { next: jest.fn().mockResolvedValue(0) },
           },
+          redisProvider,
+          signingProvider,
         ],
       }).compile();
 
@@ -169,6 +196,8 @@ describe('BondsService', () => {
             provide: NonceService,
             useValue: { next: jest.fn().mockResolvedValue(0) },
           },
+          redisProvider,
+          signingProvider,
         ],
       }).compile();
 
@@ -180,7 +209,7 @@ describe('BondsService', () => {
 
       expect(contractAddress).toBe('');
       expect(method).toBe('sweep_undistributed');
-      expect(callerSecret).toBe('');
+      expect(callerSecret).toBe('SADMIN');
       expect(args.length).toBe(2);
       expect(scValToNative(args[0])).toBe(
         'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
@@ -209,6 +238,8 @@ describe('BondsService', () => {
             provide: NonceService,
             useValue: { next: jest.fn().mockResolvedValue(0) },
           },
+          redisProvider,
+          signingProvider,
         ],
       }).compile();
       return moduleRef.get(BondsService);
@@ -287,6 +318,8 @@ describe('BondsService', () => {
             provide: NonceService,
             useValue: { next: jest.fn().mockResolvedValue(0) },
           },
+          redisProvider,
+          signingProvider,
         ],
       }).compile();
       return moduleRef.get(BondsService);

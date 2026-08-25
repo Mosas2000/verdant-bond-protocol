@@ -15,7 +15,8 @@ import {
   ChallengeRecord,
   ReportStatus,
 } from './interfaces/oracle.interface';
-import { createClient, RedisClientType } from '@redis/client';
+import { RedisService } from '../common/services/redis.service';
+import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { nativeToScVal, scValToNative, Address, xdr } from '@stellar/stellar-sdk';
 import { StellarService } from '../stellar/stellar.service';
 
@@ -23,17 +24,14 @@ const ORACLE_CONSUMER = () => process.env.ORACLE_CONSUMER_ADDRESS || '';
 
 @Injectable()
 export class OracleService {
-  private redis: RedisClientType;
-
   constructor(
     private readonly contractService: ContractService,
     private readonly ipfsService: IpfsService,
     private readonly stellarService: StellarService,
     private readonly nonceService: NonceService,
-  ) {
-    this.redis = createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
-    this.redis.connect().catch(() => {});
-  }
+    private readonly redis: RedisService,
+    private readonly signingKeys: SigningKeyProvider,
+  ) {}
 
   async submitReport(dto: SubmitReportDto, providerAddress: string): Promise<ReportResponse> {
     const ipfsResult = await this.ipfsService.uploadJson({
@@ -331,6 +329,6 @@ export class OracleService {
   }
 
   private getAdminSecret(): string {
-    return process.env.ADMIN_SECRET_KEY || '';
+    return this.signingKeys.adminSecret();
   }
 }

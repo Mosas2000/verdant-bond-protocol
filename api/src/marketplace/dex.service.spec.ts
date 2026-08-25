@@ -1,14 +1,17 @@
 import { Test } from '@nestjs/testing';
-import { nativeToScVal } from '@stellar/stellar-sdk';
+import { nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 import { DexService } from './dex.service';
 import { ContractService } from '../stellar/contract.service';
 import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
+import { RedisService } from '../common/services/redis.service';
+import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { OrderStatus } from './interfaces/marketplace.interface';
 
 describe('DexService', () => {
   let service: DexService;
   let contractService: { simulateCall: jest.Mock; invokeContractMethod: jest.Mock };
+  let redis: { get: jest.Mock; setEx: jest.Mock; del: jest.Mock };
 
   const simulateCallMock = jest.fn();
   const invokeContractMethodMock = jest.fn();
@@ -17,6 +20,11 @@ describe('DexService', () => {
     contractService = {
       simulateCall: simulateCallMock,
       invokeContractMethod: invokeContractMethodMock,
+    };
+    redis = {
+      get: jest.fn().mockResolvedValue(null),
+      setEx: jest.fn().mockResolvedValue(undefined),
+      del: jest.fn().mockResolvedValue(undefined),
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -28,6 +36,11 @@ describe('DexService', () => {
           provide: NonceService,
           useValue: { next: jest.fn().mockResolvedValue(0) },
         },
+        { provide: RedisService, useValue: redis },
+        {
+          provide: SigningKeyProvider,
+          useValue: { adminSecret: jest.fn().mockReturnValue('SADMIN') },
+        },
       ],
     }).compile();
 
@@ -36,6 +49,44 @@ describe('DexService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    redis.get.mockResolvedValue(null);
+  });
+
+  describe('listOrders', () => {
+    const SELLER = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
+    const rawOrder = (id: number, bondId = 3) =>
+      xdr.ScVal.scvVec([
+        nativeToScVal(BigInt(id), { type: 'u64' }),
+        nativeToScVal(SELLER, { type: 'address' }),
+        nativeToScVal(BigInt(bondId), { type: 'u64' }),
+        nativeToScVal(BigInt(1000), { type: 'i128' }),
+        nativeToScVal(BigInt(25), { type: 'i128' }),
+        nativeToScVal('USDC', { type: 'symbol' }),
+        xdr.ScVal.scvU32(0),
+        nativeToScVal(BigInt(1700000000), { type: 'u64' }),
+        nativeToScVal(BigInt(1700604800), { type: 'u64' }),
+      ]);
+
+    it('does not truncate listings when an intermediate order id is missing', async () => {
+      simulateCallMock.mockImplementation(({ method, args }) => {
+        if (method === 'order_count') {
+          return Promise.resolve(nativeToScVal(BigInt(4), { type: 'u64' }));
+        }
+        const id = Number(scValToNative(args[0]));
+        if (id === 3) {
+          return Promise.reject(new Error('OrderNotFound'));
+        }
+        return Promise.resolve(rawOrder(id));
+      });
+
+      const result = await service.listOrders(undefined, undefined, 1, 10);
+
+      expect(result.data.map((order) => order.id)).toEqual([1, 2, 4]);
+      expect(result.meta.total).toBe(3);
+      expect(simulateCallMock).toHaveBeenCalledWith(
+        expect.objectContaining({ method: 'order_count' }),
+      );
+    });
   });
 
   describe('decodeOrder', () => {

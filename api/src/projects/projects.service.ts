@@ -3,8 +3,9 @@ import { ContractService } from '../stellar/contract.service';
 import { StellarService } from '../stellar/stellar.service';
 import { IpfsService } from './ipfs.service';
 import { NonceService } from '../common/services/nonce.service';
+import { RedisService } from '../common/services/redis.service';
+import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { nativeToScVal, scValToNative, Address } from '@stellar/stellar-sdk';
-import { createClient, RedisClientType } from '@redis/client';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { ProjectResponse, ProjectStatusEnum, DocumentUploadResponse } from './interfaces/project.interface';
 
@@ -12,17 +13,14 @@ const PROJECT_REGISTRY = () => process.env.PROJECT_REGISTRY_ADDRESS || '';
 
 @Injectable()
 export class ProjectsService {
-  private redis: RedisClientType;
-
   constructor(
     private readonly contractService: ContractService,
     private readonly stellarService: StellarService,
     private readonly ipfsService: IpfsService,
     private readonly nonceService: NonceService,
-  ) {
-    this.redis = createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
-    this.redis.connect().catch(() => {});
-  }
+    private readonly redis: RedisService,
+    private readonly signingKeys: SigningKeyProvider,
+  ) {}
 
   async register(dto: CreateProjectDto, ownerAddress: string): Promise<ProjectResponse> {
     const metadata = {
@@ -41,7 +39,7 @@ export class ProjectsService {
     const ipfsResult = await this.ipfsService.uploadJson(metadata);
     const ipfsHash = Buffer.from(ipfsResult.hash, 'hex');
 
-    const ownerSecret = process.env.USER_SECRET_KEY || '';
+    const ownerSecret = this.signingKeys.userSecret();
     const nonce = await this.nonceService.next(PROJECT_REGISTRY(), ownerAddress);
 
     const { result } = await this.contractService.invokeContractMethod(
@@ -182,6 +180,6 @@ export class ProjectsService {
   }
 
   private getAdminSecret(): string {
-    return process.env.ADMIN_SECRET_KEY || '';
+    return this.signingKeys.adminSecret();
   }
 }

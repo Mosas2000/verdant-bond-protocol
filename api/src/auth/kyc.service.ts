@@ -1,15 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { createClient, RedisClientType } from '@redis/client';
+import { RedisService } from '../common/services/redis.service';
 import { KycStatus } from '../common/interfaces/authenticated-request.interface';
 
 @Injectable()
 export class KycService {
-  private redis: RedisClientType;
-
-  constructor() {
-    this.redis = createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
-    this.redis.connect().catch(() => {});
-  }
+  constructor(private readonly redis: RedisService) {}
 
   async getStatus(address: string): Promise<KycStatus> {
     const cached = await this.redis.get(`kyc:${address}`);

@@ -1,8 +1,8 @@
 import { Injectable, BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { createClient, RedisClientType } from '@redis/client';
 import { Keypair } from '@stellar/stellar-sdk';
 import * as crypto from 'crypto';
+import { RedisService } from '../common/services/redis.service';
 import { StellarService } from '../stellar/stellar.service';
 import { KycService } from './kyc.service';
 import { VerifySignatureDto } from './dto/verify-signature.dto';
@@ -10,16 +10,12 @@ import { ChallengeResponse, AuthTokenResponse, UserProfileResponse } from './int
 
 @Injectable()
 export class AuthService {
-  private redis: RedisClientType;
-
   constructor(
     private readonly jwtService: JwtService,
     private readonly kycService: KycService,
     private readonly stellarService: StellarService,
-  ) {
-    this.redis = createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
-    this.redis.connect().catch(() => {});
-  }
+    private readonly redis: RedisService,
+  ) {}
 
   async generateChallenge(address: string): Promise<ChallengeResponse> {
     if (!this.stellarService.isValidPublicKey(address)) {
