@@ -124,6 +124,13 @@ export class ApiService {
     });
   }
 
+  getWalletBalance(asset: QuoteAsset = 'USDC'): Observable<QuoteBalanceResponse> {
+    return this.http.get<QuoteBalanceResponse>('/api/marketplace/wallet-balance', {
+      params: { asset },
+      headers: this.headers(),
+    });
+  }
+
   depositQuote(data: DepositQuoteDto): Observable<QuoteTransactionResponse> {
     return this.http.post<QuoteTransactionResponse>('/api/marketplace/deposit', data, { headers: this.headers() });
   }
