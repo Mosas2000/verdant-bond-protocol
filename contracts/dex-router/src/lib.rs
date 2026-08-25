@@ -14,6 +14,7 @@ pub enum DataKey {
     BondIssuerAddress,
     CouponEngineAddress,
     Balance(Symbol, Address),
+    BondEscrow(u64, Address),
     Nonce(Address),
 }
 
@@ -77,6 +78,19 @@ fn set_balance(env: &Env, addr: &Address, asset: &Symbol, amount: i128) {
     env.storage()
         .persistent()
         .set(&DataKey::Balance(asset.clone(), addr.clone()), &amount);
+}
+
+fn get_bond_escrow(env: &Env, bond_id: u64, addr: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::BondEscrow(bond_id, addr.clone()))
+        .unwrap_or(0)
+}
+
+fn set_bond_escrow(env: &Env, bond_id: u64, addr: &Address, amount: i128) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::BondEscrow(bond_id, addr.clone()), &amount);
 }
 
 fn is_order_expired(env: &Env, order: &Order) -> bool {
@@ -174,6 +188,13 @@ impl DEXRouter {
 
         verify_holder_balance(&env, &seller, bond_id, amount)?;
 
+        // Escrow the bond tokens at listing time (prevents seller from transferring them away)
+        let current_escrow = get_bond_escrow(&env, bond_id, &seller);
+        let new_escrow = current_escrow
+            .checked_add(amount)
+            .ok_or(DEXError::Overflow)?;
+        set_bond_escrow(&env, bond_id, &seller, new_escrow);
+
         let count: u64 = env
             .storage()
             .instance()
@@ -260,6 +281,13 @@ impl DEXRouter {
             return Err(DEXError::OrderAlreadyFilled);
         }
 
+        // Release escrowed tokens when order is cancelled
+        let seller_escrow = get_bond_escrow(&env, order.bond_id, &order.seller);
+        let new_escrow = seller_escrow
+            .checked_sub(order.amount)
+            .unwrap_or(0);
+        set_bond_escrow(&env, order.bond_id, &order.seller, new_escrow);
+
         order.status = OrderStatus::Cancelled;
         env.storage()
             .instance()
@@ -317,6 +345,12 @@ impl DEXRouter {
             return Err(DEXError::InsufficientBalance);
         }
 
+        // Verify seller has escrowed bond tokens before attempting transfer
+        let seller_escrow = get_bond_escrow(&env, order.bond_id, &order.seller);
+        if seller_escrow < amount {
+            return Err(DEXError::InsufficientBalance);
+        }
+
         let proceeds = amount
             .checked_mul(order.price_per_token)
             .ok_or(DEXError::Overflow)?;
@@ -356,6 +390,10 @@ impl DEXRouter {
                 seller_bond_nonce.into_val(&env),
             ],
         );
+
+        // Release escrowed tokens on successful fill
+        let new_seller_escrow = seller_escrow - amount;
+        set_bond_escrow(&env, order.bond_id, &order.seller, new_seller_escrow);
 
         if amount == order.amount {
             order.status = OrderStatus::Filled;
@@ -449,6 +487,10 @@ impl DEXRouter {
 
     pub fn get_quote_balance(env: Env, address: Address, quote_asset: Symbol) -> i128 {
         get_balance(&env, &address, &quote_asset)
+    }
+
+    pub fn get_seller_bond_escrow(env: Env, seller: Address, bond_id: u64) -> i128 {
+        get_bond_escrow(&env, bond_id, &seller)
     }
 
     pub fn get_order(env: Env, order_id: u64) -> Result<Order, DEXError> {
@@ -795,6 +837,72 @@ mod test {
             client.get_quote_balance(&seller, &Symbol::new(&env, "USDC")),
             0
         );
+    }
+
+    #[test]
+    fn test_seller_escrow_prevents_balance_depletion() {
+        // Test that seller cannot bypass escrow by transferring tokens directly via BondIssuer
+        // The escrow lock at listing time protects against this attack
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let admin = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let third_party = Address::generate(&env);
+        let (_issuer_admin, issuer_id, bond_id, seller) =
+            setup_bond_and_holder(&env, 10_000, 1_000);
+
+        let issuer_client = nbbs_bond_issuer::BondIssuerClient::new(&env, &issuer_id.clone());
+
+        let contract_id = env.register(
+            DEXRouter,
+            (admin.clone(), issuer_id, Address::generate(&env)),
+        );
+        let client = DEXRouterClient::new(&env, &contract_id);
+
+        // Seller lists 1000 tokens - these are now escrowed
+        let order_id = client.list_bond_tokens(
+            &seller,
+            &bond_id,
+            &1_000i128,
+            &100i128,
+            &Symbol::new(&env, "USDC"),
+            &3600u64,
+            &0,
+        );
+
+        // Verify escrow is locked
+        assert_eq!(client.get_seller_bond_escrow(&seller, &bond_id), 1_000);
+
+        // Seller tries to transfer escrowed tokens away via BondIssuer (bypassing DEX)
+        issuer_client.transfer(&seller, &third_party, &bond_id, &1_000, &1);
+
+        // Seller now has 0 actual balance, but escrow still shows 1000
+        assert_eq!(issuer_client.get_holder_balance(&bond_id, &seller), 0);
+        assert_eq!(client.get_seller_bond_escrow(&seller, &bond_id), 1_000);
+
+        // Buyer deposits and attempts to fill - should fail because escrow check happens BEFORE transfer
+        client.deposit_quote(&buyer, &Symbol::new(&env, "USDC"), &100_000i128, &0);
+
+        // The purchase should fail with InsufficientBalance (escrow check catches it)
+        let result = client.try_execute_purchase(&buyer, &order_id, &100i128, &1_000i128, &1);
+        assert_eq!(result, Err(Ok(DEXError::InsufficientBalance)));
+
+        // Verify state is unchanged - buyer was not debited
+        assert_eq!(issuer_client.get_holder_balance(&bond_id, &buyer), 0);
+        assert_eq!(
+            client.get_quote_balance(&buyer, &Symbol::new(&env, "USDC")),
+            100_000
+        );
+        assert_eq!(
+            client.get_quote_balance(&seller, &Symbol::new(&env, "USDC")),
+            0
+        );
+
+        // Order remains open and unchanged
+        let order = client.get_order(&order_id);
+        assert_eq!(order.status, OrderStatus::Open);
+        assert_eq!(order.amount, 1_000);
     }
 
     #[test]
