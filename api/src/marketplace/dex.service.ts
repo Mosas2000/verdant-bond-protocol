@@ -100,7 +100,8 @@ export class DexService {
     );
 
     const orderId = Number(scValToNative(result));
-    await this.redis.del(`orders:*`);
+    await this.redis.delPattern(`orders:*`);
+    await this.redis.del(`order:${orderId}`);
     return this.getOrder(orderId);
   }
 
@@ -134,7 +135,8 @@ export class DexService {
       throw this.mapDexError(error);
     }
 
-    await this.redis.del(`orders:*`);
+    await this.redis.delPattern(`orders:*`);
+    await this.redis.del(`order:${dto.orderId}`);
     return this.getOrder(dto.orderId);
   }
 
@@ -151,7 +153,8 @@ export class DexService {
       nonce,
     );
 
-    await this.redis.del(`orders:*`);
+    await this.redis.delPattern(`orders:*`);
+    await this.redis.del(`order:${orderId}`);
   }
 
   async getOrder(orderId: number): Promise<OrderResponse> {
