@@ -448,7 +448,7 @@ impl OracleConsumer {
             .get(&DataKey::Report(report_id))
             .ok_or(OracleError::ReportNotFound)?;
 
-        if report.status != ReportStatus::Pending {
+        if report.status != ReportStatus::Pending && report.status != ReportStatus::Verified {
             return Err(OracleError::ReportAlreadyVerified);
         }
 
@@ -458,7 +458,12 @@ impl OracleConsumer {
             .instance()
             .get(&DataKey::ChallengeWindow)
             .unwrap_or(CHALLENGE_WINDOW_SECONDS);
-        if now.saturating_sub(report.submitted_at) > window {
+        let reference_time = if report.status == ReportStatus::Verified {
+            report.verified_at
+        } else {
+            report.submitted_at
+        };
+        if now.saturating_sub(reference_time) > window {
             return Err(OracleError::ChallengeWindowExpired);
         }
 
@@ -1251,9 +1256,22 @@ mod test {
 
         client.verify_report(&admin, &report_id, &2);
 
-        let result =
-            client.try_challenge_report(&challenger, &report_id, &make_ipfs_hash(&env, 2), &0);
-        assert_eq!(result, Err(Ok(OracleError::ReportAlreadyVerified)));
+        let verified = client.get_report(&report_id);
+        assert_eq!(verified.status, ReportStatus::Verified);
+
+        client.challenge_report(&challenger, &report_id, &make_ipfs_hash(&env, 3), &0);
+
+        let challenged = client.get_report(&report_id);
+        assert_eq!(challenged.status, ReportStatus::Challenged);
+
+        let challenge = client.get_challenge(&report_id);
+        assert_eq!(challenge.challenger, challenger);
+        assert!(!challenge.resolved);
+
+        client.resolve_challenge(&admin, &report_id, &ReportStatus::Verified, &3);
+
+        let resolved = client.get_report(&report_id);
+        assert_eq!(resolved.status, ReportStatus::Verified);
     }
 
     #[test]
