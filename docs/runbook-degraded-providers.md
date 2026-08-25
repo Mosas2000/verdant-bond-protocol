@@ -52,8 +52,8 @@ curl http://localhost:3000/oracle/monitoring/staleness
 ## Staleness metric definition
 
 - **Cadence**: expected seconds between verified reports, per methodology
-  (`VERRA-VCS` = 365d, `REMOTE-SENSING` = 90d, `IOT-SENSORS` = 30d; override
-  via `ORACLE_CADENCE_SECONDS`).
+  (`VERRA-VCS` = 365d, `REMOTE-SENSING` = 90d, `IOT-SENSORS` = 30d,
+  `BLUE-CARBON` = 90d; override via `ORACLE_CADENCE_SECONDS`).
 - **Grace**: additional slack before alerting (`ORACLE_GRACE_SECONDS`, default 30d).
 - `expectedNextReportAt = lastVerifiedAt + cadence + grace`.
 - A project with no verified report falls back to its `createdAt` as baseline.
