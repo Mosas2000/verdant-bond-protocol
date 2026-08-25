@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ApiService } from '../../services/api.service';
 import { WalletService } from '../../../auth/wallet.service';
 import { QuoteAsset } from '../../interfaces/bond.interface';
+import { appErrorMessage } from '../../errors/api-error';
 
 export interface QuoteBalances {
   USDC: number;
@@ -198,9 +199,10 @@ export class QuoteBalanceComponent implements OnInit {
         this.loadBalances();
       },
       error: (err) => {
-        this.actionError.set(
-          err.error?.detail || err.message || (this.mode() === 'deposit' ? 'Deposit failed' : 'Withdraw failed'),
-        );
+        this.actionError.set(appErrorMessage(
+          err,
+          this.mode() === 'deposit' ? 'Deposit failed' : 'Withdraw failed',
+        ));
         this.submitting.set(false);
       },
     });

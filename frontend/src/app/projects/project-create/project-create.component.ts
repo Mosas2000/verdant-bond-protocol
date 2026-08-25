@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { RouterModule, Router } from '@angular/router';
 import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ApiService } from '../../shared/services/api.service';
+import { appErrorMessage } from '../../shared/errors/api-error';
 
 @Component({
   selector: 'app-project-create',
@@ -156,7 +157,7 @@ export class ProjectCreateComponent {
         this.router.navigate(['/projects', project.id]);
       },
       error: (err) => {
-        this.error.set(err.error?.detail || err.message || 'Failed to register project');
+        this.error.set(appErrorMessage(err, 'Failed to register project'));
         this.submitting.set(false);
       },
     });

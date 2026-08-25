@@ -9,6 +9,7 @@ import { StatusBadgeComponent } from '../../shared/components/status-badge/statu
 import { LoadingSpinnerComponent } from '../../shared/components/loading-spinner/loading-spinner.component';
 import { QuoteBalanceComponent, QuoteBalances } from '../../shared/components/quote-balance/quote-balance.component';
 import { Order, Bond, QuoteAsset } from '../../shared/interfaces/bond.interface';
+import { appErrorMessage } from '../../shared/errors/api-error';
 
 @Component({
   selector: 'app-marketplace-list',
@@ -384,7 +385,7 @@ export class MarketplaceListComponent implements OnInit {
         this.loadOrders();
       },
       error: (err) => {
-        this.buyError.set(err.error?.detail || err.message || 'Buy failed');
+        this.buyError.set(appErrorMessage(err, 'Buy failed'));
         this.buySubmitting.set(false);
       },
     });
