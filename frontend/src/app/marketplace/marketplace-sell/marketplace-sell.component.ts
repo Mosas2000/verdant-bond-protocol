@@ -5,7 +5,8 @@ import { AbstractControl, FormBuilder, FormGroup, ReactiveFormsModule, Validatio
 import { ApiService } from '../../shared/services/api.service';
 import { WalletService } from '../../auth/wallet.service';
 import { QuoteBalanceComponent } from '../../shared/components/quote-balance/quote-balance.component';
-import { HeldBond } from '../../shared/interfaces/bond.interface';
+import { Bond } from '../../shared/interfaces/bond.interface';
+import { appErrorMessage } from '../../shared/errors/api-error';
 
 @Component({
   selector: 'app-marketplace-sell',
@@ -178,7 +179,7 @@ export class MarketplaceSellComponent implements OnInit {
         this.router.navigate(['/marketplace']);
       },
       error: (err) => {
-        this.error.set(err.error?.detail || err.message || 'Failed to list tokens');
+        this.error.set(appErrorMessage(err, 'Failed to list tokens'));
         this.submitting.set(false);
       },
     });
