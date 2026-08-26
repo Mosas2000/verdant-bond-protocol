@@ -1,6 +1,12 @@
 import { Test } from '@nestjs/testing';
-import { xdr, nativeToScVal } from '@stellar/stellar-sdk';
-import { UnprocessableEntityException } from '@nestjs/common';
+import { BadRequestException, ConflictException, UnprocessableEntityException } from '@nestjs/common';
+
+jest.mock('@stellar/stellar-sdk', () => {
+  const actual = jest.requireActual('@stellar/stellar-sdk');
+  return { ...actual, scValToNative: jest.fn() };
+});
+
+import { xdr, scValToNative, nativeToScVal, Keypair } from '@stellar/stellar-sdk';
 import { OracleService } from './oracle.service';
 import { ContractService } from '../stellar/contract.service';
 import { IpfsService } from '../projects/ipfs.service';
@@ -14,30 +20,41 @@ import { InvalidEvidenceReferenceError } from '../common/utils';
 
 describe('OracleService', () => {
   let service: OracleService;
-  let contractService: { invokeContractMethod: jest.Mock; simulateCall: jest.Mock };
+  let contractService: { simulateCall: jest.Mock; invokeContractMethod: jest.Mock };
   let ipfsService: { uploadJson: jest.Mock };
-  let redis: { del: jest.Mock; get: jest.Mock; setEx: jest.Mock };
+  let redis: { del: jest.Mock };
+  const adminKeypair = Keypair.random();
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    (scValToNative as jest.Mock).mockReset();
     contractService = {
-      invokeContractMethod: jest.fn().mockResolvedValue({ result: nativeToScVal(BigInt(1), { type: 'u64' }) }),
       simulateCall: jest.fn(),
+      invokeContractMethod: jest.fn().mockResolvedValue({ result: nativeToScVal(BigInt(1), { type: 'u64' }) }),
     };
     ipfsService = {
-      uploadJson: jest.fn().mockResolvedValue({ hash: 'QmYwAPJzv5CZsnAzt8auVZRnTb7F8Pz6ePzE9LbYp8Xy7F', gatewayUrl: '', pinSize: 1, timestamp: '' }),
+      uploadJson: jest.fn().mockResolvedValue({
+        hash: 'QmYwAPJzv5CZsnAzt8auVZRnTb7F8Pz6ePzE9LbYp8Xy7F',
+        gatewayUrl: '',
+        pinSize: 1,
+        timestamp: '',
+      }),
     };
-    redis = {
-      del: jest.fn().mockResolvedValue(undefined),
-      get: jest.fn().mockResolvedValue(null),
-      setEx: jest.fn().mockResolvedValue(undefined),
-    };
+    redis = { del: jest.fn().mockResolvedValue(undefined) };
+    delete process.env.ORACLE_EVIDENCE_VERIFY_RETRIEVABILITY;
 
     const moduleRef = await Test.createTestingModule({
       providers: [
         OracleService,
         { provide: ContractService, useValue: contractService },
         { provide: IpfsService, useValue: ipfsService },
-        { provide: StellarService, useValue: {} },
+        {
+          provide: StellarService,
+          useValue: {
+            getKeypairFromSecret: jest.fn().mockReturnValue({
+              publicKey: () => adminKeypair.publicKey(),
+            }),
+          },
+        },
         {
           provide: NonceService,
           useValue: { next: jest.fn().mockResolvedValue(0) },
@@ -45,32 +62,16 @@ describe('OracleService', () => {
         { provide: RedisService, useValue: redis },
         {
           provide: SigningKeyProvider,
-          useValue: { adminSecret: jest.fn().mockReturnValue('SADMIN') },
+          useValue: { adminSecret: jest.fn().mockReturnValue('SADMINSECRET') },
         },
         {
           provide: ConfigService,
-          useValue: {
-            getOracleConsumerAddress: () => 'CORACLECONSUMERADDRESSPLACEHOLDER',
-          },
+          useValue: { getOracleConsumerAddress: jest.fn().mockReturnValue('CORACLE') },
         },
       ],
     }).compile();
 
     service = moduleRef.get(OracleService);
-  });
-
-  beforeEach(() => {
-    jest.clearAllMocks();
-    ipfsService.uploadJson.mockResolvedValue({
-      hash: 'QmYwAPJzv5CZsnAzt8auVZRnTb7F8Pz6ePzE9LbYp8Xy7F',
-      gatewayUrl: '',
-      pinSize: 1,
-      timestamp: '',
-    });
-    contractService.invokeContractMethod.mockResolvedValue({
-      result: nativeToScVal(BigInt(1), { type: 'u64' }),
-    });
-    delete process.env.ORACLE_EVIDENCE_VERIFY_RETRIEVABILITY;
   });
 
   describe('decodeReport', () => {
@@ -332,6 +333,76 @@ describe('OracleService', () => {
 
         expect(global.fetch).not.toHaveBeenCalled();
       });
+    });
+  });
+
+  describe('registerProvider', () => {
+    const providerAddress = Keypair.random().publicKey();
+
+    beforeEach(() => {
+      (scValToNative as jest.Mock).mockReset();
+    });
+
+    it('rejects an unsupported methodology before calling the contract', async () => {
+      await expect(
+        service.registerProvider({ providerAddress, methodology: 'MADE-UP-METHOD' } as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(contractService.invokeContractMethod).not.toHaveBeenCalled();
+    });
+
+    it('normalizes methodology casing against the supported list', async () => {
+      contractService.simulateCall.mockRejectedValueOnce(new Error('not found'));
+
+      const result = await service.registerProvider({
+        providerAddress,
+        methodology: 'verra-vcs',
+      } as any);
+
+      expect(result.methodology).toBe('VERRA-VCS');
+      expect(contractService.invokeContractMethod).toHaveBeenCalled();
+    });
+
+    it('returns a conflict when the provider is already actively registered', async () => {
+      contractService.simulateCall.mockResolvedValueOnce({});
+      (scValToNative as jest.Mock).mockReturnValueOnce([providerAddress, 'VERRA-VCS', 0, true, 0]);
+
+      await expect(
+        service.registerProvider({ providerAddress, methodology: 'VERRA-VCS' } as any),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      expect(contractService.invokeContractMethod).not.toHaveBeenCalled();
+    });
+
+    it('returns a distinct conflict for a previously removed (inactive) provider', async () => {
+      contractService.simulateCall.mockResolvedValueOnce({});
+      (scValToNative as jest.Mock).mockReturnValueOnce([providerAddress, 'VERRA-VCS', 0, false, 0]);
+
+      await expect(
+        service.registerProvider({ providerAddress, methodology: 'VERRA-VCS' } as any),
+      ).rejects.toThrow(/does not support reactivating/);
+
+      expect(contractService.invokeContractMethod).not.toHaveBeenCalled();
+    });
+
+    it('registers successfully and invalidates the provider list cache', async () => {
+      contractService.simulateCall.mockRejectedValueOnce(new Error('not found'));
+
+      const result = await service.registerProvider({
+        providerAddress,
+        methodology: 'BLUE-CARBON',
+      } as any);
+
+      expect(result.providerAddress).toBe(providerAddress);
+      expect(result.active).toBe(true);
+      expect(contractService.invokeContractMethod).toHaveBeenCalledWith(
+        'CORACLE',
+        'register_provider',
+        'SADMINSECRET',
+        expect.any(Array),
+        0,
+      );
+      expect(redis.del).toHaveBeenCalledWith('oracle:providers');
     });
   });
 });
