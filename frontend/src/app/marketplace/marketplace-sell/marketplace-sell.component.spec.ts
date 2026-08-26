@@ -12,7 +12,10 @@ describe('MarketplaceSellComponent', () => {
 
   beforeEach(async () => {
     const apiService = {
-      getBonds: jasmine.createSpy('getBonds').and.returnValue(of({ data: [], meta: { page: 1, limit: 100, total: 0, totalPages: 1 } })),
+      getHeldBonds: jasmine.createSpy('getHeldBonds').and.returnValue(of([
+        { id: 1, creditType: 'Carbon', balance: 25 },
+        { id: 2, creditType: 'BlueCarbon', balance: 10 },
+      ])),
       listBondTokens: jasmine.createSpy('listBondTokens').and.returnValue(of({ id: 1 })),
     };
 
@@ -21,7 +24,7 @@ describe('MarketplaceSellComponent', () => {
       providers: [
         provideRouter([]),
         { provide: ApiService, useValue: apiService },
-        { provide: WalletService, useValue: { isConnected: signal(false), address: signal(null) } },
+        { provide: WalletService, useValue: { isConnected: signal(true), address: signal('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF') } },
       ],
     }).compileComponents();
   });
@@ -36,8 +39,14 @@ describe('MarketplaceSellComponent', () => {
     expect(component).toBeTruthy();
   });
 
-  it('loads available bonds for the listing form', () => {
-    expect(component.bonds()).toEqual([]);
+  it('loads only bonds held by the connected wallet', () => {
+    expect(component.bonds().map((bond) => bond.id)).toEqual([1, 2]);
+    expect(fixture.nativeElement.querySelectorAll('#bondId option').length).toBe(3);
+  });
+
+  it('rejects an amount above the selected bond balance', () => {
+    component.form.patchValue({ bondId: 1, amount: 26 });
+    expect(component.form.get('amount')?.hasError('exceedsBalance')).toBeTrue();
   });
 
   it('has a valid default listing form', () => {

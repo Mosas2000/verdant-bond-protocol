@@ -1,6 +1,8 @@
 import { Component, inject, OnInit, ChangeDetectionStrategy, signal, output, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { forkJoin, of } from 'rxjs';
+import { catchError } from 'rxjs/operators';
 import { ApiService } from '../../services/api.service';
 import { WalletService } from '../../../auth/wallet.service';
 import { QuoteAsset } from '../../interfaces/bond.interface';
@@ -35,7 +37,10 @@ const EMPTY_BALANCES: QuoteBalances = { USDC: 0, XLM: 0 };
         @for (qa of quoteAssets; track qa) {
           <div class="balance-card" [class.active]="selectedAsset === qa" (click)="selectAsset(qa)">
             <span class="balance-asset">{{ qa }}</span>
-            <span class="balance-value">{{ balances()[qa] | number }}</span>
+            <div class="balance-values">
+              <div class="balance-row"><span class="balance-label">Escrowed:</span> <span class="balance-value">{{ balances()[qa] | number }}</span></div>
+              <div class="balance-row"><span class="balance-label">Wallet:</span> <span class="balance-value wallet-val">{{ walletBalances()[qa] | number }}</span></div>
+            </div>
           </div>
         }
       </div>
@@ -82,10 +87,14 @@ const EMPTY_BALANCES: QuoteBalances = { USDC: 0, XLM: 0 };
     .panel-title { font-size: 1rem; font-weight: 600; margin: 0; }
     .refresh-btn { font-size: 0.75rem; padding: 4px 10px; }
     .balance-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px; }
-    .balance-card { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border: 1px solid #e5e7eb; border-radius: 10px; cursor: pointer; transition: border-color 0.15s; }
+    .balance-card { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border: 1px solid #e5e7eb; border-radius: 10px; cursor: pointer; transition: border-color 0.15s; }
     .balance-card.active { border-color: #3b82f6; background: #f8fafc; }
     .balance-asset { font-size: 0.75rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; }
-    .balance-value { font-size: 1.25rem; font-weight: 700; color: #1a1a2e; }
+    .balance-values { display: flex; flex-direction: column; gap: 4px; }
+    .balance-row { display: flex; justify-content: space-between; align-items: center; }
+    .balance-label { font-size: 0.75rem; color: #6b7280; }
+    .balance-value { font-size: 1.125rem; font-weight: 700; color: #1a1a2e; }
+    .wallet-val { font-size: 1rem; color: #4b5563; }
     .action-tabs { display: flex; gap: 8px; margin-bottom: 12px; }
     .tab-btn { padding: 6px 14px; border-radius: 8px; font-size: 0.8125rem; font-weight: 500; cursor: pointer; border: 1px solid #d1d5db; background: #fff; color: #6b7280; }
     .tab-btn.active { background: #1a1a2e; color: #fff; border-color: #1a1a2e; }
@@ -115,6 +124,7 @@ export class QuoteBalanceComponent implements OnInit {
   readonly quoteAssets: QuoteAsset[] = QUOTE_ASSETS;
 
   readonly balances = signal<QuoteBalances>(EMPTY_BALANCES);
+  readonly walletBalances = signal<QuoteBalances>(EMPTY_BALANCES);
   readonly loading = signal(false);
   readonly loadError = signal('');
 
@@ -147,6 +157,7 @@ export class QuoteBalanceComponent implements OnInit {
   loadBalances(): void {
     if (!this.walletService.isConnected()) {
       this.balances.set(EMPTY_BALANCES);
+      this.walletBalances.set(EMPTY_BALANCES);
       this.balanceChange.emit(this.balances());
       return;
     }
@@ -154,23 +165,20 @@ export class QuoteBalanceComponent implements OnInit {
     this.loading.set(true);
     this.loadError.set('');
 
-    this.apiService.getQuoteBalance('USDC').subscribe({
-      next: (usdc) => {
-        this.apiService.getQuoteBalance('XLM').subscribe({
-          next: (xlm) => {
-            this.balances.set({ USDC: usdc.balance, XLM: xlm.balance });
-            this.loading.set(false);
-            this.balanceChange.emit(this.balances());
-          },
-          error: () => {
-            this.balances.set({ USDC: usdc.balance, XLM: 0 });
-            this.loading.set(false);
-            this.balanceChange.emit(this.balances());
-          },
-        });
+    forkJoin({
+      usdcEscrow: this.apiService.getQuoteBalance('USDC').pipe(catchError(() => of({ balance: 0 }))),
+      xlmEscrow: this.apiService.getQuoteBalance('XLM').pipe(catchError(() => of({ balance: 0 }))),
+      usdcWallet: this.apiService.getWalletBalance('USDC').pipe(catchError(() => of({ balance: 0 }))),
+      xlmWallet: this.apiService.getWalletBalance('XLM').pipe(catchError(() => of({ balance: 0 }))),
+    }).subscribe({
+      next: (res) => {
+        this.balances.set({ USDC: res.usdcEscrow.balance, XLM: res.xlmEscrow.balance });
+        this.walletBalances.set({ USDC: res.usdcWallet.balance, XLM: res.xlmWallet.balance });
+        this.loading.set(false);
+        this.balanceChange.emit(this.balances());
       },
       error: () => {
-        this.loadError.set('Failed to load escrowed quote balance');
+        this.loadError.set('Failed to load balances');
         this.loading.set(false);
       },
     });
