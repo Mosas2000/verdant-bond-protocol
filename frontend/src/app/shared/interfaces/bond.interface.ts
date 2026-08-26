@@ -12,6 +12,10 @@ export interface Bond {
   createdAt: string;
 }
 
+export interface HeldBond extends Bond {
+  balance: number;
+}
+
 export interface Project {
   id: number;
   name: string;

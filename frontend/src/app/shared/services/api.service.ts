@@ -4,7 +4,7 @@ import { Observable } from 'rxjs';
 import { AuthService } from '../../auth/auth.service';
 import { WalletService } from '../../auth/wallet.service';
 import {
-  Bond, Project, Order, PaginatedResponse,
+  Bond, HeldBond, Project, Order, PaginatedResponse,
   SubscriptionResponse, CreateProjectDto, ListBondDto, BuyBondDto,
   ClaimCreditsResponse, TransferResponse,
   UndistributedTotalResponse, SweepUndistributedResponse,
@@ -39,6 +39,12 @@ export class ApiService {
 
   getBond(id: number): Observable<Bond> {
     return this.http.get<Bond>(`/api/bonds/${id}`, { headers: this.headers() });
+  }
+
+  getHeldBonds(address: string): Observable<HeldBond[]> {
+    return this.http.get<HeldBond[]>(`/api/bonds/held/${address}`, {
+      headers: this.headers(),
+    });
   }
 
   issueBond(data: any): Observable<Bond> {
@@ -119,6 +125,13 @@ export class ApiService {
 
   getQuoteBalance(asset: QuoteAsset = 'USDC'): Observable<QuoteBalanceResponse> {
     return this.http.get<QuoteBalanceResponse>('/api/marketplace/quote-balance', {
+      params: { asset },
+      headers: this.headers(),
+    });
+  }
+
+  getWalletBalance(asset: QuoteAsset = 'USDC'): Observable<QuoteBalanceResponse> {
+    return this.http.get<QuoteBalanceResponse>('/api/marketplace/wallet-balance', {
       params: { asset },
       headers: this.headers(),
     });

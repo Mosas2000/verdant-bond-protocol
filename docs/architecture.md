@@ -122,6 +122,35 @@ DEXRouter ──► BondIssuer (settle purchase via transfer, debiting seller / 
 CreditRetirement ──► CouponEngine (verify credit ownership)
 ```
 
+## Oracle Report Status Machine
+
+Reports follow a strict status lifecycle managed by `OracleConsumer`:
+
+```
+                   ┌──────────┐
+                   │ Pending  │
+                   └────┬─────┘
+                        │
+          ┌─────────────┼─────────────┐
+          ▼                           ▼
+   ┌──────────┐                ┌────────────┐
+   │ Verified │◄───────────────│ Challenged │
+   └──────────┘  (exonerated)  └─────┬──────┘
+          ▲                           │
+          │                 (overturned)
+          │                           ▼
+          │                    ┌──────────┐
+          └────────────────────│ Rejected │
+                               └──────────┘
+```
+
+- **Pending → Verified**: report accumulates independent verifier signatures up to the configured `SignatureThreshold`.
+- **Pending → Challenged**: any address submits counter-evidence within the challenge window.
+- **Verified → Challenged**: any address disputes a verified report within the challenge window (measured from `verified_at`).
+- **Challenged → Verified**: admin resolves the challenge in favour of the provider (report exonerated, no slash).
+- **Challenged → Rejected**: admin overturns the report; the provider is slashed 10% of stake.
+- **CouponEngine coupling**: `distribute_coupon` only accepts reports in `Verified` status. While a report is `Challenged`, coupons for the associated bond period are held in escrow until the dispute is resolved.
+
 ## Bond Maturity
 
 - A bond matures when the ledger timestamp reaches its `maturity_date` — `mature_bond` rejects calls made before that instant (`BondError::Overflow`).
@@ -152,7 +181,7 @@ CreditRetirement ──► CouponEngine (verify credit ownership)
 ## Coupon Integrity
 
 - `CouponEngine.distribute_coupon` accepts an **on-chain `report_id`** instead of a caller-supplied report, eliminating fabricated distributions.
-- It reads the report from the `OracleConsumer` contract and rejects any report whose status is not `Verified` (`ReportNotVerified`).
+- It reads the report from the `OracleConsumer` contract and rejects any report whose status is not `Verified` (`ReportNotVerified`). Reports in `Challenged` status are rejected, effectively holding coupons in escrow while a dispute is active.
 - The report's `project_id` must match the bond's registered project, otherwise distribution is rejected.
 - The verified report id is persisted in `PeriodInfo`, making every distribution auditable back to its evidence.
 - Integer-division remainder that cannot be allocated to holders is recorded as `undistributed` per period and aggregated in `UndistributedTotal`; the admin can recover it via `sweep_undistributed`, preventing value from being silently lost.

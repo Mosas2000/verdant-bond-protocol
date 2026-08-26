@@ -10,6 +10,11 @@ import { ChallengeResponse, AuthTokenResponse, UserProfileResponse } from './int
 
 @Injectable()
 export class AuthService {
+  private readonly accessTokenExpiry = process.env.JWT_EXPIRY || '15m';
+  private readonly refreshTokenExpiry = process.env.JWT_REFRESH_EXPIRY || '7d';
+  private readonly refreshTokenSecret =
+    process.env.JWT_REFRESH_SECRET || `${process.env.JWT_SECRET || 'dev-secret-change-in-production'}:refresh`;
+
   constructor(
     private readonly jwtService: JwtService,
     private readonly kycService: KycService,
@@ -52,16 +57,32 @@ export class AuthService {
 
     const payload = { sub: dto.address, kycStatus };
     const accessToken = this.jwtService.sign(payload);
+    const refreshToken = this.jwtService.sign(
+      { ...payload, tokenType: 'refresh' },
+      { secret: this.refreshTokenSecret, expiresIn: this.refreshTokenExpiry },
+    );
 
-    return { accessToken, tokenType: 'Bearer', expiresIn: '7d' };
+    return {
+      accessToken,
+      refreshToken,
+      tokenType: 'Bearer',
+      expiresIn: this.accessTokenExpiry,
+      refreshExpiresIn: this.refreshTokenExpiry,
+    };
   }
 
   async refreshToken(token: string): Promise<AuthTokenResponse> {
     try {
-      const payload = this.jwtService.verify(token) as { sub: string; kycStatus: string };
+      const payload = this.jwtService.verify(token, {
+        secret: this.refreshTokenSecret,
+      }) as { sub: string; kycStatus: string; tokenType: string };
+      if (payload.tokenType !== 'refresh') {
+        throw new UnauthorizedException('Invalid refresh token');
+      }
+
       const newPayload = { sub: payload.sub, kycStatus: payload.kycStatus };
       const accessToken = this.jwtService.sign(newPayload);
-      return { accessToken, tokenType: 'Bearer', expiresIn: '7d' };
+      return { accessToken, tokenType: 'Bearer', expiresIn: this.accessTokenExpiry };
     } catch {
       throw new UnauthorizedException('Invalid or expired token');
     }
