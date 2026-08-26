@@ -22,6 +22,7 @@ import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
 import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
+import { BondStatusEnum, BondMaturityStatusEnum, CreditTypeEnum } from './interfaces/bond.interface';
 
 const redisProvider = {
   provide: RedisService,
@@ -167,7 +168,50 @@ describe('BondsService', () => {
       expect(options.contractAddress).toBe('');
       expect(options.method).toBe('get_undistributed_total');
       expect(options.args).toEqual([nativeToScVal(BigInt(3), { type: 'u64' })]);
-      expect(result).toEqual({ bondId: 3, undistributedTotal: 42 });
+      expect(result).toEqual({ bondId: 3, undistributedTotal: '42' });
+    });
+  });
+
+  describe('findHeldByAddress', () => {
+    it('returns only bonds with a positive on-chain balance', async () => {
+      const contractService = {
+        simulateCall: jest.fn()
+          .mockResolvedValueOnce(nativeToScVal(BigInt(2), { type: 'u64' }))
+          .mockResolvedValueOnce(nativeToScVal(BigInt(25), { type: 'i128' }))
+          .mockResolvedValueOnce(nativeToScVal(BigInt(0), { type: 'i128' })),
+      };
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          BondsService,
+          { provide: ContractService, useValue: contractService },
+          { provide: StellarService, useValue: {} },
+          { provide: NonceService, useValue: { next: jest.fn() } },
+          redisProvider,
+          signingProvider,
+        ],
+      }).compile();
+      const svc = moduleRef.get(BondsService);
+      jest.spyOn(svc, 'findOne').mockImplementation(async (id) => ({
+        id,
+        projectId: '',
+        faceValue: '0',
+        couponSchedule: [],
+        creditType: CreditTypeEnum.Carbon,
+        maturityDate: 0,
+        maturityStatus: BondMaturityStatusEnum.Active,
+        totalSupply: '0',
+        totalSubscribed: '0',
+        status: BondStatusEnum.Active,
+        createdAt: '',
+      }));
+
+      const result = await svc.findHeldByAddress(
+        'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe(1);
+      expect(result[0].balance).toBe('25');
     });
   });
 
@@ -216,7 +260,7 @@ describe('BondsService', () => {
       );
       expect(scValToNative(args[1])).toBe(BigInt(3));
       expect(nonce).toBe(0);
-      expect(result).toEqual({ bondId: 3, swept: 42, transactionHash: '0xabc' });
+      expect(result).toEqual({ bondId: 3, swept: '42', transactionHash: '0xabc' });
     });
   });
 

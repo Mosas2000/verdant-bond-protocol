@@ -19,8 +19,10 @@ import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { nativeToScVal, scValToNative, Address, xdr } from '@stellar/stellar-sdk';
 import { StellarService } from '../stellar/stellar.service';
+import { toBigIntString } from '../common/utils';
+import { ConfigService } from '../config/config.service';
 
-const ORACLE_CONSUMER = () => process.env.ORACLE_CONSUMER_ADDRESS || '';
+
 
 @Injectable()
 export class OracleService {
@@ -31,9 +33,10 @@ export class OracleService {
     private readonly nonceService: NonceService,
     private readonly redis: RedisService,
     private readonly signingKeys: SigningKeyProvider,
+    private readonly configService: ConfigService,
   ) {}
 
-  async submitReport(dto: SubmitReportDto, providerAddress: string): Promise<ReportResponse> {
+async submitReport(dto: SubmitReportDto, providerAddress: string): Promise<ReportResponse> {
     const ipfsResult = await this.ipfsService.uploadJson({
       projectId: dto.projectId,
       periodStart: dto.periodStart,
@@ -46,10 +49,10 @@ export class OracleService {
     });
 
     const adminSecret = this.getAdminSecret();
-    const nonce = await this.nonceService.next(ORACLE_CONSUMER(), providerAddress);
+    const nonce = await this.nonceService.next(this.configService.getOracleConsumerAddress(), providerAddress);
 
     const { result } = await this.contractService.invokeContractMethod(
-      ORACLE_CONSUMER(), 'submit_report', adminSecret,
+      this.configService.getOracleConsumer(), 'submit_report', adminSecret,
       [
         Address.fromString(providerAddress).toScVal(),
         this.toBytes32(dto.projectId),
@@ -64,12 +67,14 @@ export class OracleService {
 
     const reportId = Number(scValToNative(result));
 
+    await this.redis.del(`reports:${dto.projectId}`);
+
     return {
       id: reportId,
       projectId: dto.projectId,
       periodStart: dto.periodStart,
       periodEnd: dto.periodEnd,
-      carbonSequestered: dto.carbonSequestered,
+      carbonSequestered: toBigIntString(dto.carbonSequestered),
       methodology: dto.methodology,
       ipfsHash: ipfsResult.hash,
       providerAddress,
@@ -84,7 +89,7 @@ export class OracleService {
     if (cached) return JSON.parse(cached);
 
     const idsScVal = await this.contractService.simulateCall({
-      contractAddress: ORACLE_CONSUMER(),
+      contractAddress: this.configService.getOracleConsumerAddress(),
       method: 'get_project_reports',
       args: [this.toBytes32(projectId)],
     });
@@ -94,7 +99,7 @@ export class OracleService {
     for (const reportId of ids) {
       try {
         const reportScVal = await this.contractService.simulateCall({
-          contractAddress: ORACLE_CONSUMER(),
+          contractAddress: this.configService.getOracleConsumerAddress(),
           method: 'get_report',
           args: [nativeToScVal(BigInt(reportId), { type: 'u64' })],
         });
@@ -106,12 +111,12 @@ export class OracleService {
     return reports;
   }
 
-  async challengeReport(reportId: number, dto: ChallengeDto, challengerAddress: string): Promise<ChallengeResponse> {
+async challengeReport(reportId: number, dto: ChallengeDto, challengerAddress: string): Promise<ChallengeResponse> {
     const adminSecret = this.getAdminSecret();
-    const nonce = await this.nonceService.next(ORACLE_CONSUMER(), challengerAddress);
+    const nonce = await this.nonceService.next(this.configService.getOracleConsumerAddress(), challengerAddress);
 
     await this.contractService.invokeContractMethod(
-      ORACLE_CONSUMER(), 'challenge_report', adminSecret,
+      this.configService.getOracleConsumer(), 'challenge_report', adminSecret,
       [
         Address.fromString(challengerAddress).toScVal(),
         nativeToScVal(BigInt(reportId), { type: 'u64' }),
@@ -119,6 +124,8 @@ export class OracleService {
       ],
       nonce,
     );
+
+    await this.redis.del(`oracle:providers`);
 
     return {
       reportId,
@@ -130,13 +137,13 @@ export class OracleService {
     };
   }
 
-  async registerProvider(dto: RegisterProviderDto): Promise<ProviderResponse> {
+async registerProvider(dto: RegisterProviderDto): Promise<ProviderResponse> {
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
-    const nonce = await this.nonceService.next(ORACLE_CONSUMER(), adminAddress);
+    const nonce = await this.nonceService.next(this.configService.getOracleConsumerAddress(), adminAddress);
 
     await this.contractService.invokeContractMethod(
-      ORACLE_CONSUMER(), 'register_provider', adminSecret,
+      this.configService.getOracleConsumer(), 'register_provider', adminSecret,
       [
         Address.fromString(adminAddress).toScVal(),
         Address.fromString(dto.providerAddress).toScVal(),
@@ -144,6 +151,8 @@ export class OracleService {
       ],
       nonce,
     );
+
+    await this.redis.del(`oracle:providers`);
 
     return {
       providerAddress: dto.providerAddress,
@@ -160,7 +169,7 @@ export class OracleService {
     if (cached) return JSON.parse(cached);
 
     const listScVal = await this.contractService.simulateCall({
-      contractAddress: ORACLE_CONSUMER(),
+      contractAddress: this.configService.getOracleConsumerAddress(),
       method: 'list_providers',
       args: [],
     });
@@ -170,7 +179,7 @@ export class OracleService {
     for (const address of addresses) {
       try {
         const providerScVal = await this.contractService.simulateCall({
-          contractAddress: ORACLE_CONSUMER(),
+          contractAddress: this.configService.getOracleConsumerAddress(),
           method: 'get_provider',
           args: [Address.fromString(address).toScVal()],
         });
@@ -191,19 +200,19 @@ export class OracleService {
 
   async getProviderStats(providerAddress: string): Promise<ProviderStatsWithHistory> {
     const statsScVal = await this.contractService.simulateCall({
-      contractAddress: ORACLE_CONSUMER(),
+      contractAddress: this.configService.getOracleConsumerAddress(),
       method: 'get_provider_stats',
       args: [Address.fromString(providerAddress).toScVal()],
     });
     const stats = this.toRecord(scValToNative(statsScVal) as any);
 
     const slashScVal = await this.contractService.simulateCall({
-      contractAddress: ORACLE_CONSUMER(),
+      contractAddress: this.configService.getOracleConsumerAddress(),
       method: 'get_slash_history',
       args: [Address.fromString(providerAddress).toScVal()],
     });
     const challengeScVal = await this.contractService.simulateCall({
-      contractAddress: ORACLE_CONSUMER(),
+      contractAddress: this.configService.getOracleConsumerAddress(),
       method: 'get_challenge_history',
       args: [Address.fromString(providerAddress).toScVal()],
     });
@@ -220,8 +229,8 @@ export class OracleService {
       reportsSubmitted: Number(this.field(stats, 'reports_submitted', 0)),
       challengesFaced: Number(this.field(stats, 'challenges_faced', 1)),
       slashes: Number(this.field(stats, 'slashes', 2)),
-      totalPenalty: Number(this.field(stats, 'total_penalty', 3)),
-      stake: Number(this.field(stats, 'stake', 4)),
+      totalPenalty: toBigIntString(this.field(stats, 'total_penalty', 3)),
+      stake: toBigIntString(this.field(stats, 'stake', 4)),
       active: Boolean(this.field(stats, 'active', 5)),
       slashHistory,
       challengeHistory,
@@ -230,7 +239,7 @@ export class OracleService {
 
   async getSlashHistory(providerAddress: string): Promise<SlashRecord[]> {
     const scVal = await this.contractService.simulateCall({
-      contractAddress: ORACLE_CONSUMER(),
+      contractAddress: this.configService.getOracleConsumerAddress(),
       method: 'get_slash_history',
       args: [Address.fromString(providerAddress).toScVal()],
     });
@@ -241,7 +250,7 @@ export class OracleService {
 
   async getChallengeHistory(providerAddress: string): Promise<ChallengeRecord[]> {
     const scVal = await this.contractService.simulateCall({
-      contractAddress: ORACLE_CONSUMER(),
+      contractAddress: this.configService.getOracleConsumerAddress(),
       method: 'get_challenge_history',
       args: [Address.fromString(providerAddress).toScVal()],
     });
@@ -253,8 +262,8 @@ export class OracleService {
   private decodeSlashRecord(record: Record<string, any>): SlashRecord {
     return {
       reportId: Number(this.field(record, 'report_id', 0)),
-      penalty: Number(this.field(record, 'penalty', 1)),
-      remainingStake: Number(this.field(record, 'remaining_stake', 2)),
+      penalty: toBigIntString(this.field(record, 'penalty', 1)),
+      remainingStake: toBigIntString(this.field(record, 'remaining_stake', 2)),
       timestamp: new Date(Number(this.field(record, 'timestamp', 3)) * 1000).toISOString(),
       activeAfter: Boolean(this.field(record, 'active_after', 4)),
     };
@@ -300,7 +309,7 @@ export class OracleService {
       projectId: Buffer.from(data[2] as Uint8Array).toString('hex'),
       periodStart: Number(data[3]),
       periodEnd: Number(data[4]),
-      carbonSequestered: Number(data[5]),
+      carbonSequestered: toBigIntString(data[5]),
       methodology: data[6] as string,
       ipfsHash: Buffer.from(data[7] as Uint8Array).toString('hex'),
       status: this.reportStatusFromIndex(Number(data[8])),

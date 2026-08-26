@@ -8,8 +8,10 @@ import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { nativeToScVal, scValToNative, Address } from '@stellar/stellar-sdk';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { ProjectResponse, ProjectStatusEnum, DocumentUploadResponse } from './interfaces/project.interface';
+import { encodeCid, decodeCid, toBigIntString } from '../common/utils';
+import { ConfigService } from '../config/config.service';
 
-const PROJECT_REGISTRY = () => process.env.PROJECT_REGISTRY_ADDRESS || '';
+
 
 @Injectable()
 export class ProjectsService {
@@ -20,6 +22,7 @@ export class ProjectsService {
     private readonly nonceService: NonceService,
     private readonly redis: RedisService,
     private readonly signingKeys: SigningKeyProvider,
+    private readonly configService: ConfigService,
   ) {}
 
   async register(dto: CreateProjectDto, ownerAddress: string): Promise<ProjectResponse> {
@@ -37,13 +40,13 @@ export class ProjectsService {
     };
 
     const ipfsResult = await this.ipfsService.uploadJson(metadata);
-    const ipfsHash = Buffer.from(ipfsResult.hash, 'hex');
+    const ipfsHash = encodeCid(ipfsResult.hash);
 
     const ownerSecret = this.signingKeys.userSecret();
-    const nonce = await this.nonceService.next(PROJECT_REGISTRY(), ownerAddress);
+    const nonce = await this.nonceService.next(this.configService.getProjectRegistryAddress(), ownerAddress);
 
     const { result } = await this.contractService.invokeContractMethod(
-      PROJECT_REGISTRY(), 'register_project', ownerSecret,
+      this.configService.getProjectRegistryAddress(), 'register_project', ownerSecret,
       [
         Address.fromString(ownerAddress).toScVal(),
         nativeToScVal(ipfsHash, { type: 'bytes' }),
@@ -69,7 +72,7 @@ export class ProjectsService {
     let total = 0;
     try {
       const countScVal = await this.contractService.simulateCall({
-        contractAddress: PROJECT_REGISTRY(), method: 'project_count', args: [],
+        contractAddress: this.configService.getProjectRegistryAddress(), method: 'project_count', args: [],
       });
       total = Number(scValToNative(countScVal));
     } catch {}
@@ -107,10 +110,10 @@ export class ProjectsService {
   async approve(id: number): Promise<ProjectResponse> {
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
-    const nonce = await this.nonceService.next(PROJECT_REGISTRY(), adminAddress);
+    const nonce = await this.nonceService.next(this.configService.getProjectRegistryAddress(), adminAddress);
 
     await this.contractService.invokeContractMethod(
-      PROJECT_REGISTRY(), 'approve_project', adminSecret,
+      this.configService.getProjectRegistryAddress(), 'approve_project', adminSecret,
       [Address.fromString(adminAddress).toScVal(), nativeToScVal(BigInt(id), { type: 'u64' })],
       nonce,
     );
@@ -122,10 +125,10 @@ export class ProjectsService {
   async reject(id: number): Promise<ProjectResponse> {
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
-    const nonce = await this.nonceService.next(PROJECT_REGISTRY(), adminAddress);
+    const nonce = await this.nonceService.next(this.configService.getProjectRegistryAddress(), adminAddress);
 
     await this.contractService.invokeContractMethod(
-      PROJECT_REGISTRY(), 'reject_project', adminSecret,
+      this.configService.getProjectRegistryAddress(), 'reject_project', adminSecret,
       [Address.fromString(adminAddress).toScVal(), nativeToScVal(BigInt(id), { type: 'u64' })],
       nonce,
     );
@@ -153,13 +156,13 @@ export class ProjectsService {
 
   private async buildProjectResponse(id: number): Promise<ProjectResponse> {
     const projectScVal = await this.contractService.simulateCall({
-      contractAddress: PROJECT_REGISTRY(), method: 'get_project',
+      contractAddress: this.configService.getProjectRegistryAddress(), method: 'get_project',
       args: [nativeToScVal(BigInt(id), { type: 'u64' })],
     });
 
     const project = scValToNative(projectScVal) as any[];
 
-    const metadataIpfsHash = Buffer.from(project[2] as Uint8Array).toString('hex');
+    const metadataIpfsHash = decodeCid(project[2] as Uint8Array);
     let metadata: any = {};
     try {
       metadata = await this.ipfsService.getContent(metadataIpfsHash);

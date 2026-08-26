@@ -4,7 +4,6 @@ import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
 import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
-import { xdr, nativeToScVal, scValToNative, Address } from '@stellar/stellar-sdk';
 import { CreateBondDto } from './dto/create-bond.dto';
 import { SubscribeDto } from './dto/subscribe.dto';
 import { DistributeCouponDto } from './dto/distribute-coupon.dto';
@@ -12,6 +11,7 @@ import { ClaimCreditsDto } from './dto/claim-credits.dto';
 import { TransferBondDto } from './dto/transfer-bond.dto';
 import {
   BondResponse,
+  HeldBondResponse,
   SubscriptionResponse,
   HolderListResponse,
   CouponDistributionResponse,
@@ -23,9 +23,8 @@ import {
   BondMaturityStatusEnum,
   CreditTypeEnum,
 } from './interfaces/bond.interface';
-
-const BOND_ISSUER = () => process.env.BOND_ISSUER_ADDRESS || '';
-const COUPON_ENGINE = () => process.env.COUPON_ENGINE_ADDRESS || '';
+import { toBigIntString } from '../common/utils';
+import { ConfigService } from '../config/config.service';
 
 const BOND_ERROR_CODE = {
   NotInitialized: 1,
@@ -48,17 +47,18 @@ export class BondsService {
     private readonly nonceService: NonceService,
     private readonly redis: RedisService,
     private readonly signingKeys: SigningKeyProvider,
+    private readonly configService: ConfigService,
   ) {}
 
   async create(dto: CreateBondDto): Promise<BondResponse> {
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
-    const nonce = await this.nonceService.next(BOND_ISSUER(), adminAddress);
+    const nonce = await this.nonceService.next(this.configService.getBondIssuerAddress(), adminAddress);
 
     const configScVal = this.encodeBondConfig(dto);
 
     const { result } = await this.contractService.invokeContractMethod(
-      BOND_ISSUER(), 'issue_bond', adminSecret,
+      this.configService.getBondIssuerAddress(), 'issue_bond', adminSecret,
       [Address.fromString(adminAddress).toScVal(), configScVal],
       nonce,
     );
@@ -79,7 +79,7 @@ export class BondsService {
 
     try {
       const countScVal = await this.contractService.simulateCall({
-        contractAddress: BOND_ISSUER(), method: 'bond_count', args: [],
+        contractAddress: this.configService.getBondIssuerAddress(), method: 'bond_count', args: [],
       });
       total = Number(scValToNative(countScVal));
     } catch {}
@@ -113,11 +113,45 @@ export class BondsService {
     return bond;
   }
 
+  async findHeldByAddress(address: string): Promise<HeldBondResponse[]> {
+    try {
+      Address.fromString(address);
+    } catch {
+      throw new BadRequestException('Invalid wallet address');
+    }
+
+    let total = 0;
+    try {
+      const countScVal = await this.contractService.simulateCall({
+        contractAddress: this.configService.getBondIssuerAddress(), method: 'bond_count', args: [],
+      });
+      total = Number(scValToNative(countScVal));
+    } catch {
+      return [];
+    }
+
+    const heldBonds: HeldBondResponse[] = [];
+    for (let id = 1; id <= total; id++) {
+      try {
+        const balanceScVal = await this.contractService.simulateCall({
+          contractAddress: this.configService.getBondIssuerAddress(), method: 'get_holder_balance',
+          args: [nativeToScVal(BigInt(id), { type: 'u64' }), Address.fromString(address).toScVal()],
+        });
+        const balance = toBigIntString(scValToNative(balanceScVal));
+        if (balance !== '0') {
+          heldBonds.push({ ...(await this.findOne(id)), balance });
+        }
+      } catch {}
+    }
+
+    return heldBonds;
+  }
+
   async subscribe(id: number, dto: SubscribeDto): Promise<SubscriptionResponse> {
     const investorSecret = this.signingKeys.investorSecret();
-    const nonce = await this.nonceService.next(BOND_ISSUER(), dto.investorAddress);
+    const nonce = await this.nonceService.next(this.configService.getBondIssuerAddress(), dto.investorAddress);
     const { transactionHash } = await this.contractService.invokeContractMethod(
-      BOND_ISSUER(), 'subscribe', investorSecret,
+      this.configService.getBondIssuerAddress(), 'subscribe', investorSecret,
       [
         Address.fromString(dto.investorAddress).toScVal(),
         nativeToScVal(BigInt(id), { type: 'u64' }),
@@ -129,7 +163,7 @@ export class BondsService {
     await this.redis.del(`bond:${id}`);
     await this.redis.sAdd(`bond:${id}:holders`, dto.investorAddress);
 
-    return { bondId: id, investorAddress: dto.investorAddress, amount: dto.amount, transactionHash: transactionHash || '' };
+    return { bondId: id, investorAddress: dto.investorAddress, amount: toBigIntString(dto.amount), transactionHash: transactionHash || '' };
   }
 
   async getHolders(id: number): Promise<HolderListResponse> {
@@ -139,11 +173,11 @@ export class BondsService {
     for (const address of holderAddresses) {
       try {
         const balanceScVal = await this.contractService.simulateCall({
-          contractAddress: BOND_ISSUER(), method: 'get_holder_balance',
+          contractAddress: this.configService.getBondIssuerAddress(), method: 'get_holder_balance',
           args: [nativeToScVal(BigInt(id), { type: 'u64' }), Address.fromString(address).toScVal()],
         });
-        const balance = Number(scValToNative(balanceScVal));
-        if (balance > 0) holders.push({ address, balance });
+        const balance = toBigIntString(scValToNative(balanceScVal));
+        if (balance !== '0') holders.push({ address, balance });
       } catch {}
     }
 
@@ -153,12 +187,12 @@ export class BondsService {
   async distributeCoupon(id: number, dto: DistributeCouponDto): Promise<CouponDistributionResponse> {
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
-    const nonce = await this.nonceService.next(COUPON_ENGINE(), adminAddress);
+    const nonce = await this.nonceService.next(this.configService.getCouponEngineAddress(), adminAddress);
 
     const holderAddresses = await this.redis.sMembers(`bond:${id}:holders`);
 
     const { result } = await this.contractService.invokeContractMethod(
-      COUPON_ENGINE(), 'distribute_coupon', adminSecret,
+      this.configService.getCouponEngineAddress(), 'distribute_coupon', adminSecret,
       [
         Address.fromString(adminAddress).toScVal(),
         nativeToScVal(BigInt(id), { type: 'u64' }),
@@ -173,17 +207,17 @@ export class BondsService {
     return {
       bondId: id,
       periodIndex: dto.periodIndex,
-      totalCredits: Number(parsed?.[2] ?? 0),
+      totalCredits: toBigIntString(parsed?.[2] ?? 0),
       holderCount: Number(parsed?.[3] ?? 0),
     };
   }
 
   async claimCredits(id: number, dto: ClaimCreditsDto): Promise<ClaimCreditsResponse> {
     const investorSecret = this.signingKeys.investorSecret();
-    const nonce = await this.nonceService.next(COUPON_ENGINE(), dto.investorAddress);
+    const nonce = await this.nonceService.next(this.configService.getCouponEngineAddress(), dto.investorAddress);
 
     const { result, transactionHash } = await this.contractService.invokeContractMethod(
-      COUPON_ENGINE(), 'claim_credits', investorSecret,
+      this.configService.getCouponEngineAddress(), 'claim_credits', investorSecret,
       [
         Address.fromString(dto.investorAddress).toScVal(),
         nativeToScVal(BigInt(id), { type: 'u64' }),
@@ -194,17 +228,17 @@ export class BondsService {
     return {
       bondId: id,
       investorAddress: dto.investorAddress,
-      credits: Number(scValToNative(result)),
+      credits: toBigIntString(scValToNative(result)),
       transactionHash: transactionHash || '',
     };
   }
 
   async transfer(id: number, dto: TransferBondDto): Promise<TransferResponse> {
     const investorSecret = this.signingKeys.investorSecret();
-    const nonce = await this.nonceService.next(BOND_ISSUER(), dto.fromAddress);
+    const nonce = await this.nonceService.next(this.configService.getBondIssuerAddress(), dto.fromAddress);
 
     const { transactionHash } = await this.contractService.invokeContractMethod(
-      BOND_ISSUER(), 'transfer', investorSecret,
+      this.configService.getBondIssuerAddress(), 'transfer', investorSecret,
       [
         Address.fromString(dto.fromAddress).toScVal(),
         Address.fromString(dto.toAddress).toScVal(),
@@ -220,30 +254,30 @@ export class BondsService {
       bondId: id,
       fromAddress: dto.fromAddress,
       toAddress: dto.toAddress,
-      amount: dto.amount,
+      amount: toBigIntString(dto.amount),
       transactionHash: transactionHash || '',
     };
   }
 
   async getUndistributedTotal(id: number): Promise<UndistributedTotalResponse> {
     const resultScVal = await this.contractService.simulateCall({
-      contractAddress: COUPON_ENGINE(), method: 'get_undistributed_total',
+      contractAddress: this.configService.getCouponEngineAddress(), method: 'get_undistributed_total',
       args: [nativeToScVal(BigInt(id), { type: 'u64' })],
     });
 
     return {
       bondId: id,
-      undistributedTotal: Number(scValToNative(resultScVal)),
+      undistributedTotal: toBigIntString(scValToNative(resultScVal)),
     };
   }
 
   async sweepUndistributed(id: number): Promise<SweepUndistributedResponse> {
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
-    const nonce = await this.nonceService.next(COUPON_ENGINE(), adminAddress);
+    const nonce = await this.nonceService.next(this.configService.getCouponEngineAddress(), adminAddress);
 
     const { result, transactionHash } = await this.contractService.invokeContractMethod(
-      COUPON_ENGINE(), 'sweep_undistributed', adminSecret,
+      this.configService.getCouponEngineAddress(), 'sweep_undistributed', adminSecret,
       [
         Address.fromString(adminAddress).toScVal(),
         nativeToScVal(BigInt(id), { type: 'u64' }),
@@ -253,7 +287,7 @@ export class BondsService {
 
     return {
       bondId: id,
-      swept: Number(scValToNative(result)),
+      swept: toBigIntString(scValToNative(result)),
       transactionHash: transactionHash || '',
     };
   }
@@ -261,11 +295,11 @@ export class BondsService {
   async mature(id: number): Promise<BondResponse> {
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
-    const nonce = await this.nonceService.next(BOND_ISSUER(), adminAddress);
+    const nonce = await this.nonceService.next(this.configService.getBondIssuerAddress(), adminAddress);
 
     try {
       await this.contractService.invokeContractMethod(
-        BOND_ISSUER(), 'mature_bond', adminSecret,
+        this.configService.getBondIssuerAddress(), 'mature_bond', adminSecret,
         [Address.fromString(adminAddress).toScVal(), nativeToScVal(BigInt(id), { type: 'u64' })],
         nonce,
       );
@@ -290,13 +324,13 @@ export class BondsService {
 
   private async buildBondResponse(id: number): Promise<BondResponse> {
     const configScVal = await this.contractService.simulateCall({
-      contractAddress: BOND_ISSUER(), method: 'get_bond',
+      contractAddress: this.configService.getBondIssuerAddress(), method: 'get_bond',
       args: [nativeToScVal(BigInt(id), { type: 'u64' })],
     });
     const config = scValToNative(configScVal) as any[];
 
     const stateScVal = await this.contractService.simulateCall({
-      contractAddress: BOND_ISSUER(), method: 'get_bond_state',
+      contractAddress: this.configService.getBondIssuerAddress(), method: 'get_bond_state',
       args: [nativeToScVal(BigInt(id), { type: 'u64' })],
     });
     const state = scValToNative(stateScVal) as any[];
@@ -312,13 +346,13 @@ export class BondsService {
     return {
       id,
       projectId: Buffer.from(config[0] as Uint8Array).toString('hex'),
-      faceValue: Number(config[1]),
-      couponSchedule: (config[2] as any[]).map((v: bigint) => Number(v)),
+      faceValue: toBigIntString(config[1]),
+      couponSchedule: (config[2] as any[]).map((v: bigint) => toBigIntString(v)),
       creditType: config[3] as CreditTypeEnum,
       maturityDate,
       maturityStatus,
-      totalSupply: Number(config[5]),
-      totalSubscribed: Number(state[0]),
+      totalSupply: toBigIntString(config[5]),
+      totalSubscribed: toBigIntString(state[0]),
       status,
       createdAt: new Date(Number(state[2]) * 1000).toISOString(),
     };

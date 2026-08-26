@@ -22,8 +22,10 @@ import {
 } from './interfaces/marketplace.interface';
 import { nativeToScVal, scValToNative, Address } from '@stellar/stellar-sdk';
 import { PaginatedResponse } from '../common/dto/pagination.dto';
+import { toBigIntString } from '../common/utils';
+import { ConfigService } from '../config/config.service';
 
-const DEX_ROUTER = () => process.env.DEX_ROUTER_ADDRESS || '';
+
 
 const DEX_ERROR_CODE = {
   NotInitialized: 1,
@@ -47,6 +49,7 @@ export class DexService {
     private readonly nonceService: NonceService,
     private readonly redis: RedisService,
     private readonly signingKeys: SigningKeyProvider,
+    private readonly configService: ConfigService,
   ) {}
 
   async listOrders(
@@ -84,10 +87,10 @@ export class DexService {
 
   async listBondTokens(dto: ListBondDto, sellerAddress: string): Promise<OrderResponse> {
     const adminSecret = this.getAdminSecret();
-    const nonce = await this.nonceService.next(DEX_ROUTER(), sellerAddress);
+    const nonce = await this.nonceService.next(this.configService.getDexRouterAddress(), sellerAddress);
 
     const { result } = await this.contractService.invokeContractMethod(
-      DEX_ROUTER(), 'list_bond_tokens', adminSecret,
+      this.configService.getDexRouterAddress(), 'list_bond_tokens', adminSecret,
       [
         Address.fromString(sellerAddress).toScVal(),
         nativeToScVal(BigInt(dto.bondId), { type: 'u64' }),
@@ -100,28 +103,29 @@ export class DexService {
     );
 
     const orderId = Number(scValToNative(result));
-    await this.redis.del(`orders:*`);
+    await this.redis.delPattern(`orders:*`);
+    await this.redis.del(`order:${orderId}`);
     return this.getOrder(orderId);
   }
 
   async buyBondTokens(dto: BuyBondDto, buyerAddress: string): Promise<OrderResponse> {
     const order = await this.getOrder(dto.orderId);
-    const proceeds = order.pricePerToken * dto.amount;
+    const proceeds = BigInt(order.pricePerToken) * BigInt(dto.amount);
 
     const escrowed = await this.getQuoteBalance(buyerAddress, order.quoteAsset);
-    if (escrowed.balance < proceeds) {
+    if (BigInt(escrowed.balance) < proceeds) {
       throw new BadRequestException(
-        `Insufficient escrowed ${order.quoteAsset}: required ${proceeds}, escrowed ${escrowed}. ` +
+        `Insufficient escrowed ${order.quoteAsset}: required ${proceeds}, escrowed ${escrowed.balance}. ` +
         'Call POST /marketplace/escrow/deposit before purchasing.',
       );
     }
 
     const adminSecret = this.getAdminSecret();
-    const nonce = await this.nonceService.next(DEX_ROUTER(), buyerAddress);
+    const nonce = await this.nonceService.next(this.configService.getDexRouterAddress(), buyerAddress);
 
     try {
       await this.contractService.invokeContractMethod(
-        DEX_ROUTER(), 'execute_purchase', adminSecret,
+        this.configService.getDexRouterAddress(), 'execute_purchase', adminSecret,
         [
           Address.fromString(buyerAddress).toScVal(),
           nativeToScVal(BigInt(dto.orderId), { type: 'u64' }),
@@ -134,16 +138,17 @@ export class DexService {
       throw this.mapDexError(error);
     }
 
-    await this.redis.del(`orders:*`);
+    await this.redis.delPattern(`orders:*`);
+    await this.redis.del(`order:${dto.orderId}`);
     return this.getOrder(dto.orderId);
   }
 
   async cancelOrder(orderId: number, callerAddress: string): Promise<void> {
     const adminSecret = this.getAdminSecret();
-    const nonce = await this.nonceService.next(DEX_ROUTER(), callerAddress);
+    const nonce = await this.nonceService.next(this.configService.getDexRouterAddress(), callerAddress);
 
     await this.contractService.invokeContractMethod(
-      DEX_ROUTER(), 'cancel_listing', adminSecret,
+      this.configService.getDexRouterAddress(), 'cancel_listing', adminSecret,
       [
         Address.fromString(callerAddress).toScVal(),
         nativeToScVal(BigInt(orderId), { type: 'u64' }),
@@ -151,7 +156,8 @@ export class DexService {
       nonce,
     );
 
-    await this.redis.del(`orders:*`);
+    await this.redis.delPattern(`orders:*`);
+    await this.redis.del(`order:${orderId}`);
   }
 
   async getOrder(orderId: number): Promise<OrderResponse> {
@@ -160,7 +166,7 @@ export class DexService {
     if (cached) return JSON.parse(cached);
 
     const orderScVal = await this.contractService.simulateCall({
-      contractAddress: DEX_ROUTER(),
+      contractAddress: this.configService.getDexRouterAddress(),
       method: 'get_order',
       args: [nativeToScVal(BigInt(orderId), { type: 'u64' })],
     });
@@ -175,14 +181,14 @@ export class DexService {
     asset: QuoteAsset = 'USDC',
   ): Promise<QuoteBalanceResponse> {
     const balanceScVal = await this.contractService.simulateCall({
-      contractAddress: DEX_ROUTER(),
+      contractAddress: this.configService.getDexRouterAddress(),
       method: 'get_quote_balance',
       args: [
         Address.fromString(address).toScVal(),
         nativeToScVal(asset, { type: 'symbol' }),
       ],
     });
-    const balance = Number(scValToNative(balanceScVal));
+    const balance = toBigIntString(scValToNative(balanceScVal));
     return { address, asset, balance };
   }
 
@@ -191,10 +197,10 @@ export class DexService {
     callerAddress: string,
   ): Promise<QuoteTransactionResponse> {
     const adminSecret = this.getAdminSecret();
-    const nonce = await this.nonceService.next(DEX_ROUTER(), callerAddress);
+    const nonce = await this.nonceService.next(this.configService.getDexRouterAddress(), callerAddress);
 
     const { transactionHash } = await this.contractService.invokeContractMethod(
-      DEX_ROUTER(), 'deposit_quote', adminSecret,
+      this.configService.getDexRouterAddress(), 'deposit_quote', adminSecret,
       [
         Address.fromString(callerAddress).toScVal(),
         nativeToScVal(dto.asset, { type: 'symbol' }),
@@ -211,10 +217,10 @@ export class DexService {
     callerAddress: string,
   ): Promise<QuoteTransactionResponse> {
     const adminSecret = this.getAdminSecret();
-    const nonce = await this.nonceService.next(DEX_ROUTER(), callerAddress);
+    const nonce = await this.nonceService.next(this.configService.getDexRouterAddress(), callerAddress);
 
     const { transactionHash } = await this.contractService.invokeContractMethod(
-      DEX_ROUTER(), 'withdraw_quote', adminSecret,
+      this.configService.getDexRouterAddress(), 'withdraw_quote', adminSecret,
       [
         Address.fromString(callerAddress).toScVal(),
         nativeToScVal(dto.asset, { type: 'symbol' }),
@@ -226,13 +232,23 @@ export class DexService {
     return { address: callerAddress, asset: dto.asset, amount: dto.amount, transactionHash };
   }
 
+  private async invalidateOrdersCache(): Promise<void> {
+    const keys: string[] = [];
+    for await (const key of this.redis.scanIterator({ MATCH: 'orders:*' })) {
+      keys.push(key);
+    }
+    if (keys.length > 0) {
+      await this.redis.del(keys);
+    }
+  }
+
   private decodeOrder(data: any[]): OrderResponse {
     return {
       id: Number(data[0]),
       seller: data[1] as string,
       bondId: Number(data[2]),
-      amount: Number(data[3]),
-      pricePerToken: Number(data[4]),
+      amount: toBigIntString(data[3]),
+      pricePerToken: toBigIntString(data[4]),
       quoteAsset: data[5] as QuoteAsset,
       status: this.orderStatusFromIndex(Number(data[6])),
       createdAt: new Date(Number(data[7]) * 1000).toISOString(),
@@ -255,9 +271,49 @@ export class DexService {
     return this.signingKeys.adminSecret();
   }
 
+  /**
+   * Invoke one bounded `clean_expired_orders` pass.
+   * Pass `startId` from the previous result's `nextStartId` (or `1` / `0` to begin).
+   * When `nextStartId` is `0`, the scan has reached `order_count`.
+   */
+  async cleanExpiredOrders(
+    startId = 1,
+    limit = 50,
+  ): Promise<{ cleaned: number; nextStartId: number }> {
+    const adminSecret = this.getAdminSecret();
+    const adminAddress = this.stellarService
+      .getKeypairFromSecret(adminSecret)
+      .publicKey();
+    const nonce = await this.nonceService.next(this.configService.getDexRouterAddress(), adminAddress);
+
+    const { result } = await this.contractService.invokeContractMethod(
+      this.configService.getDexRouterAddress(),
+      'clean_expired_orders',
+      adminSecret,
+      [
+        Address.fromString(adminAddress).toScVal(),
+        nativeToScVal(BigInt(startId), { type: 'u64' }),
+        nativeToScVal(limit, { type: 'u32' }),
+      ],
+      nonce,
+    );
+
+    const decoded = scValToNative(result) as { cleaned?: number; next_start_id?: number } | unknown[];
+    if (Array.isArray(decoded)) {
+      return {
+        cleaned: Number(decoded[0]),
+        nextStartId: Number(decoded[1]),
+      };
+    }
+    return {
+      cleaned: Number((decoded as any).cleaned ?? 0),
+      nextStartId: Number((decoded as any).next_start_id ?? 0),
+    };
+  }
+
   private async getOrderCount(): Promise<number> {
     const countScVal = await this.contractService.simulateCall({
-      contractAddress: DEX_ROUTER(),
+      contractAddress: this.configService.getDexRouterAddress(),
       method: 'order_count',
       args: [],
     });
@@ -267,7 +323,7 @@ export class DexService {
   private async tryGetOrder(id: number): Promise<OrderResponse | null> {
     try {
       const orderScVal = await this.contractService.simulateCall({
-        contractAddress: DEX_ROUTER(),
+        contractAddress: this.configService.getDexRouterAddress(),
         method: 'get_order',
         args: [nativeToScVal(BigInt(id), { type: 'u64' })],
       });

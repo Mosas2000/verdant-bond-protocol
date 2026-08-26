@@ -15,6 +15,7 @@ import {
   BondResponse,
   SubscriptionResponse,
   HolderListResponse,
+  HeldBondResponse,
   CouponDistributionResponse,
   ClaimCreditsResponse,
   TransferResponse,
@@ -35,6 +36,13 @@ export class BondsController {
   @Get()
   async findAll(@Query() query: PaginationDto) {
     return this.bondsService.findAll(query.page, query.limit);
+  }
+
+  @Get('held/:address')
+  async findHeldByAddress(
+    @Param('address') address: string,
+  ): Promise<HeldBondResponse[]> {
+    return this.bondsService.findHeldByAddress(address);
   }
 
   @Get(':id')
