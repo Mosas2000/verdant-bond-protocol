@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { ContractService } from '../stellar/contract.service';
 import { IpfsService } from '../projects/ipfs.service';
@@ -26,6 +26,17 @@ import { ConfigService } from '../config/config.service';
 
 @Injectable()
 export class OracleService {
+  /**
+   * Methodologies backed by a registered OracleProviderAdapter (see
+   * ./providers/*). Kept in sync manually since the adapters are wired up
+   * as separate Nest providers rather than a discoverable registry.
+   */
+  private static readonly SUPPORTED_METHODOLOGIES = [
+    'VERRA-VCS',
+    'BLUE-CARBON',
+    'REMOTE-SENSING',
+  ];
+
   constructor(
     private readonly contractService: ContractService,
     private readonly ipfsService: IpfsService,
@@ -52,7 +63,7 @@ async submitReport(dto: SubmitReportDto, providerAddress: string): Promise<Repor
     const nonce = await this.nonceService.next(this.configService.getOracleConsumerAddress(), providerAddress);
 
     const { result } = await this.contractService.invokeContractMethod(
-      this.configService.getOracleConsumer(), 'submit_report', adminSecret,
+      this.configService.getOracleConsumerAddress(), 'submit_report', adminSecret,
       [
         Address.fromString(providerAddress).toScVal(),
         this.toBytes32(dto.projectId),
@@ -116,7 +127,7 @@ async challengeReport(reportId: number, dto: ChallengeDto, challengerAddress: st
     const nonce = await this.nonceService.next(this.configService.getOracleConsumerAddress(), challengerAddress);
 
     await this.contractService.invokeContractMethod(
-      this.configService.getOracleConsumer(), 'challenge_report', adminSecret,
+      this.configService.getOracleConsumerAddress(), 'challenge_report', adminSecret,
       [
         Address.fromString(challengerAddress).toScVal(),
         nativeToScVal(BigInt(reportId), { type: 'u64' }),
@@ -138,16 +149,41 @@ async challengeReport(reportId: number, dto: ChallengeDto, challengerAddress: st
   }
 
 async registerProvider(dto: RegisterProviderDto): Promise<ProviderResponse> {
+    const methodology = dto.methodology.trim().toUpperCase();
+    if (!OracleService.SUPPORTED_METHODOLOGIES.includes(methodology)) {
+      throw new BadRequestException(
+        `Unsupported methodology "${dto.methodology}". Supported methodologies: ` +
+          `${OracleService.SUPPORTED_METHODOLOGIES.join(', ')}.`,
+      );
+    }
+
+    const existing = await this.findProvider(dto.providerAddress);
+    if (existing) {
+      if (existing.active) {
+        throw new ConflictException(
+          `Provider ${dto.providerAddress} is already registered with methodology "${existing.methodology}".`,
+        );
+      }
+      // The contract has no reactivation path: register_provider rejects any
+      // address already present in storage, active or not (see
+      // OracleError::ProviderAlreadyExists in oracle-consumer/src/lib.rs).
+      // Surface that distinctly so callers don't retry expecting it to work.
+      throw new ConflictException(
+        `Provider ${dto.providerAddress} was previously registered and removed. ` +
+          'This contract does not support reactivating a removed provider; register a different address instead.',
+      );
+    }
+
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
     const nonce = await this.nonceService.next(this.configService.getOracleConsumerAddress(), adminAddress);
 
     await this.contractService.invokeContractMethod(
-      this.configService.getOracleConsumer(), 'register_provider', adminSecret,
+      this.configService.getOracleConsumerAddress(), 'register_provider', adminSecret,
       [
         Address.fromString(adminAddress).toScVal(),
         Address.fromString(dto.providerAddress).toScVal(),
-        nativeToScVal(dto.methodology, { type: 'symbol' }),
+        nativeToScVal(methodology, { type: 'symbol' }),
       ],
       nonce,
     );
@@ -156,11 +192,35 @@ async registerProvider(dto: RegisterProviderDto): Promise<ProviderResponse> {
 
     return {
       providerAddress: dto.providerAddress,
-      methodology: dto.methodology,
+      methodology,
       name: `Oracle ${dto.providerAddress.slice(0, 6)}`,
       active: true,
       registeredAt: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Looks up a provider's current on-chain state, or null if it has never
+   * been registered. Used to validate registration intent before spending a
+   * transaction on a call the contract would reject.
+   */
+  private async findProvider(
+    providerAddress: string,
+  ): Promise<{ methodology: string; active: boolean } | null> {
+    try {
+      const providerScVal = await this.contractService.simulateCall({
+        contractAddress: this.configService.getOracleConsumerAddress(),
+        method: 'get_provider',
+        args: [Address.fromString(providerAddress).toScVal()],
+      });
+      const data = scValToNative(providerScVal) as any[];
+      return {
+        methodology: data[1] as string,
+        active: data[3] as boolean,
+      };
+    } catch {
+      return null;
+    }
   }
 
   async listProviders(): Promise<ProviderResponse[]> {
