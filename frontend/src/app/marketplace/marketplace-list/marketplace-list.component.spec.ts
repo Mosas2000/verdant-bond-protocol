@@ -3,7 +3,7 @@ import { signal } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { HttpErrorResponse } from '@angular/common/http';
 import { of, throwError, Observable, Subject } from 'rxjs';
-import { MarketplaceListComponent, ORDERS_RETRY_BASE_DELAY_MS } from './marketplace-list.component';
+import { MarketplaceListComponent, ORDERS_RETRY_BASE_DELAY_MS, ORDERS_POLL_INTERVAL_MS } from './marketplace-list.component';
 import { ApiService } from '../../shared/services/api.service';
 import { AuthService } from '../../auth/auth.service';
 import { WalletService } from '../../auth/wallet.service';
@@ -13,8 +13,8 @@ const ORDER: Order = {
   id: 1,
   seller: 'GBOB',
   bondId: 3,
-  amount: 20,
-  pricePerToken: 10,
+  amount: '20',
+  pricePerToken: '10',
   quoteAsset: 'USDC',
   status: 'Open',
   createdAt: new Date().toISOString(),
@@ -22,7 +22,7 @@ const ORDER: Order = {
 
 const META = { page: 1, limit: 20, total: 1, totalPages: 1 };
 
-const FRESH_ORDER: Order = { ...ORDER, status: 'Filled', amount: 5 };
+const FRESH_ORDER: Order = { ...ORDER, status: 'Filled', amount: '5' };
 
 describe('MarketplaceListComponent', () => {
   let component: MarketplaceListComponent;
@@ -31,6 +31,7 @@ describe('MarketplaceListComponent', () => {
     getBonds: jasmine.Spy;
     getOrders: jasmine.Spy;
     buyBondTokens: jasmine.Spy;
+    cancelOrder: jasmine.Spy;
     getQuoteBalance: jasmine.Spy;
   };
   let walletService: {
@@ -43,6 +44,7 @@ describe('MarketplaceListComponent', () => {
       getBonds: jasmine.createSpy('getBonds').and.returnValue(of({ data: [], meta: { page: 1, limit: 100, total: 0, totalPages: 1 } })),
       getOrders: jasmine.createSpy('getOrders').and.returnValue(of({ data: [ORDER], meta: { page: 1, limit: 20, total: 1, totalPages: 1 } })),
       buyBondTokens: jasmine.createSpy('buyBondTokens').and.returnValue(of(undefined)),
+      cancelOrder: jasmine.createSpy('cancelOrder').and.returnValue(of(undefined)),
       getQuoteBalance: jasmine
         .createSpy('getQuoteBalance')
         .and.callFake((asset: string) =>
@@ -70,6 +72,14 @@ describe('MarketplaceListComponent', () => {
     fixture = TestBed.createComponent(MarketplaceListComponent);
     component = fixture.componentInstance;
     fixture.detectChanges();
+  });
+
+  // The background poll (#91) schedules a periodic RxJS timer for the life
+  // of the component; fixture.destroy() runs ngOnDestroy, which unsubscribes
+  // it via takeUntil(this.destroy$) -- required so fakeAsync tests don't
+  // report a periodic timer still pending when the test ends.
+  afterEach(() => {
+    fixture.destroy();
   });
 
   it('creates the component', () => {
@@ -148,7 +158,7 @@ describe('MarketplaceListComponent', () => {
 
       component.refreshOrders();
       expect(component.orders()[0].status).toBe('Filled');
-      expect(component.orders()[0].amount).toBe(5);
+      expect(component.orders()[0].amount).toBe('5');
     });
 
     it('updates the UI with fresh order data after a refresh', () => {
@@ -173,6 +183,118 @@ describe('MarketplaceListComponent', () => {
       component.onBuy(ORDER);
 
       expect(apiService.getOrders).toHaveBeenCalledWith(undefined, true);
+    });
+  });
+
+  describe('stale order reconciliation (#91)', () => {
+    it('polls for order status changes in the background without showing the loading spinner', fakeAsync(() => {
+      apiService.getOrders.calls.reset();
+      apiService.getOrders.and.returnValue(of({ data: [FRESH_ORDER], meta: META }));
+
+      tick(ORDERS_POLL_INTERVAL_MS);
+
+      expect(apiService.getOrders).toHaveBeenCalledTimes(1);
+      expect(component.orders()[0].status).toBe('Filled');
+      expect(component.loading()).toBe(false);
+
+      tick(ORDERS_POLL_INTERVAL_MS);
+      expect(apiService.getOrders).toHaveBeenCalledTimes(2);
+    }));
+
+    it('does not force cache bypass on a background poll (respects the server cache)', fakeAsync(() => {
+      apiService.getOrders.calls.reset();
+      apiService.getOrders.and.returnValue(of({ data: [ORDER], meta: META }));
+
+      tick(ORDERS_POLL_INTERVAL_MS);
+
+      expect(apiService.getOrders).toHaveBeenCalledWith(undefined, false);
+    }));
+
+    it('cancels an open order and refreshes the list on success', () => {
+      apiService.getOrders.calls.reset();
+      apiService.getOrders.and.returnValue(of({ data: [], meta: META }));
+
+      component.onCancel(ORDER);
+
+      expect(apiService.cancelOrder).toHaveBeenCalledWith(1);
+      expect(component.cancellingOrderId()).toBeNull();
+      expect(apiService.getOrders).toHaveBeenCalledWith(undefined, true);
+    });
+
+    it('surfaces a clear error and still refreshes the list when a cancel is rejected as stale', () => {
+      apiService.cancelOrder.and.returnValue(
+        throwError(() => new HttpErrorResponse({
+          status: 409,
+          error: { detail: 'Order 1 is no longer available (status: Filled).' },
+        })),
+      );
+      apiService.getOrders.calls.reset();
+      apiService.getOrders.and.returnValue(of({ data: [FRESH_ORDER], meta: META }));
+
+      component.onCancel(ORDER);
+
+      expect(component.cancelError()).toContain('no longer available');
+      expect(component.cancellingOrderId()).toBeNull();
+      expect(apiService.getOrders).toHaveBeenCalledWith(undefined, true);
+    });
+
+    it('closes the buy form and refreshes when a buy is rejected because the order state changed (409)', () => {
+      apiService.buyBondTokens.and.returnValue(
+        throwError(() => new HttpErrorResponse({ status: 409, error: { detail: 'Order state changed.' } })),
+      );
+      apiService.getOrders.calls.reset();
+      apiService.getOrders.and.returnValue(of({ data: [FRESH_ORDER], meta: META }));
+      component.openBuy(ORDER);
+      component.buyAmount = 5;
+      component.buyMaxPrice = 10;
+
+      component.onBuy(ORDER);
+
+      expect(component.buyOrderId()).toBeNull();
+      expect(apiService.getOrders).toHaveBeenCalledWith(undefined, true);
+    });
+
+    it('keeps the buy form open on a non-conflict error (e.g. insufficient funds) so the user can adjust', () => {
+      apiService.buyBondTokens.and.returnValue(
+        throwError(() => new HttpErrorResponse({ status: 402, error: { detail: 'Insufficient escrowed funds.' } })),
+      );
+      component.openBuy(ORDER);
+      component.buyAmount = 5;
+      component.buyMaxPrice = 10;
+
+      component.onBuy(ORDER);
+
+      expect(component.buyOrderId()).toBe(ORDER.id);
+      expect(component.buyError()).toContain('Insufficient escrowed funds');
+    });
+
+    it('prevents a buy while a cancel is pending for this wallet (shared nonce)', () => {
+      apiService.cancelOrder.and.returnValue(new Subject()); // never resolves: cancel stays pending
+      component.onCancel(ORDER);
+      expect(component.actionPending()).toBe(true);
+
+      component.openBuy(ORDER);
+      component.buyAmount = 5;
+      component.buyMaxPrice = 10;
+      apiService.buyBondTokens.calls.reset();
+
+      component.onBuy(ORDER);
+
+      expect(apiService.buyBondTokens).not.toHaveBeenCalled();
+    });
+
+    it('prevents a cancel while a buy is pending for this wallet (shared nonce)', () => {
+      apiService.buyBondTokens.and.returnValue(new Subject()); // never resolves: buy stays pending
+      component.openBuy(ORDER);
+      component.buyAmount = 5;
+      component.buyMaxPrice = 10;
+      component.onBuy(ORDER);
+      expect(component.actionPending()).toBe(true);
+
+      apiService.cancelOrder.calls.reset();
+      component.onCancel(ORDER);
+
+      expect(apiService.cancelOrder).not.toHaveBeenCalled();
     });
   });
 
