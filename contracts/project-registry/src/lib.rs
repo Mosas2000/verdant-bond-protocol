@@ -34,6 +34,8 @@ pub struct ProjectSummary {
     pub country: Symbol,
 }
 
+const MAX_DOCUMENTS: u32 = 10;
+
 fn project_id_to_bytes(env: &Env, id: u64) -> BytesN<32> {
     let mut arr = [0u8; 32];
     arr[..8].copy_from_slice(&id.to_be_bytes());
@@ -125,6 +127,11 @@ impl ProjectRegistry {
             .instance()
             .set(&DataKey::Project(key), &project);
 
+        env.events().publish(
+            (Symbol::new(&env, "project_registered"),),
+            (new_id, caller.clone(), project.methodology.clone(), project.country.clone()),
+        );
+
         let mut owner_projects: Vec<u64> = env
             .storage()
             .instance()
@@ -176,6 +183,11 @@ impl ProjectRegistry {
             .instance()
             .set(&DataKey::Project(key), &project);
 
+        env.events().publish(
+            (Symbol::new(&env, "project_approved"),),
+            (project_id, caller),
+        );
+
         Ok(())
     }
 
@@ -216,6 +228,11 @@ impl ProjectRegistry {
         env.storage()
             .instance()
             .set(&DataKey::Project(key), &project);
+
+        env.events().publish(
+            (Symbol::new(&env, "project_rejected"),),
+            (project_id, caller),
+        );
 
         Ok(())
     }
@@ -282,7 +299,7 @@ impl ProjectRegistry {
         project_id: u64,
         document_hashes: Vec<BytesN<32>>,
     ) -> Result<(), RegistryError> {
-        if document_hashes.len() > MAX_DOCUMENTS as usize {
+        if document_hashes.len() > MAX_DOCUMENTS {
             return Err(RegistryError::InvalidArgument);
         }
         let key = DataKey::ProjectDocuments(project_id);
