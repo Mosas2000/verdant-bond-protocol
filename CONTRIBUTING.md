@@ -161,6 +161,17 @@ ng e2e                   # E2E tests
 cd contracts && cargo test && cd ..
 cd api && npm run test && cd ..
 cd frontend && ng test --watch=false --browsers=ChromeHeadless && cd ..
+cd oracle && npm test && cd ..
+```
+
+### Docker Compose (Full Stack)
+
+```bash
+# Bootstrap infrastructure and API
+./scripts/bootstrap.sh
+
+# Or manually:
+docker compose up -d
 ```
 
 ## Pull Request Process
