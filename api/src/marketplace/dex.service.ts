@@ -259,6 +259,46 @@ export class DexService {
     return this.signingKeys.adminSecret();
   }
 
+  /**
+   * Invoke one bounded `clean_expired_orders` pass.
+   * Pass `startId` from the previous result's `nextStartId` (or `1` / `0` to begin).
+   * When `nextStartId` is `0`, the scan has reached `order_count`.
+   */
+  async cleanExpiredOrders(
+    startId = 1,
+    limit = 50,
+  ): Promise<{ cleaned: number; nextStartId: number }> {
+    const adminSecret = this.getAdminSecret();
+    const adminAddress = this.stellarService
+      .getKeypairFromSecret(adminSecret)
+      .publicKey();
+    const nonce = await this.nonceService.next(DEX_ROUTER(), adminAddress);
+
+    const { result } = await this.contractService.invokeContractMethod(
+      DEX_ROUTER(),
+      'clean_expired_orders',
+      adminSecret,
+      [
+        Address.fromString(adminAddress).toScVal(),
+        nativeToScVal(BigInt(startId), { type: 'u64' }),
+        nativeToScVal(limit, { type: 'u32' }),
+      ],
+      nonce,
+    );
+
+    const decoded = scValToNative(result) as { cleaned?: number; next_start_id?: number } | unknown[];
+    if (Array.isArray(decoded)) {
+      return {
+        cleaned: Number(decoded[0]),
+        nextStartId: Number(decoded[1]),
+      };
+    }
+    return {
+      cleaned: Number((decoded as any).cleaned ?? 0),
+      nextStartId: Number((decoded as any).next_start_id ?? 0),
+    };
+  }
+
   private async getOrderCount(): Promise<number> {
     const countScVal = await this.contractService.simulateCall({
       contractAddress: DEX_ROUTER(),

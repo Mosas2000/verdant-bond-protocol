@@ -70,6 +70,7 @@ pub fn cancel_listing(...)     // release escrowed bond tokens
 pub fn get_seller_bond_escrow(...)  // query escrowed bond balance
 pub fn set_admin(current_admin, new_admin)
 pub fn get_admin()
+pub fn clean_expired_orders(caller, start_id, limit, nonce)  // batched expired cleanup
 pub fn get_order(...)
 pub fn get_orders_by_seller(...)
 ```
@@ -173,6 +174,8 @@ Reports follow a strict status lifecycle managed by `OracleConsumer`:
 - `execute_purchase` verifies the seller's escrowed balance **before** attempting the cross-contract transfer (`BondIssuer.transfer`); if the seller has transferred tokens away (bypassing the DEX), the purchase fails gracefully with `InsufficientBalance` instead of silently failing partway through.
 - `execute_purchase` atomically transfers bond tokens (`BondIssuer.transfer`) and escrowed quote (`price_per_token * amount`) from buyer to seller, releasing the seller's escrow for the filled amount. A fill either fully settles or fully reverts.
 - Sellers can `withdraw_quote` their proceeds; `get_quote_balance` reports escrowed balances by symbol.
+- Expired-order cleanup is **cursor-batched**: `clean_expired_orders(caller, start_id, limit, nonce)` scans at most `min(limit, 100)` order IDs per call and returns `(cleaned, next_start_id)` so an off-chain scheduler can finish the book across multiple invocations without a full-table scan.
+- **Tradeoff:** lazy/opportunistic cleanup was considered and rejected: marking an order `Expired` inside `execute_purchase`'s error path cannot work (a Soroban call that returns an error reverts all writes), and scanning a seller's full order list inside `list_bond_tokens` would reintroduce unbounded cost on a user path. The periodic cursor-batched admin sweep is the cleanup mechanism.
 - `cancel_listing` releases the escrowed bond tokens back to the seller's control.
 - **Escrow Design**: Both buyers and sellers have escrow protections:
   - **Buyers**: Quote asset escrowed at `deposit_quote`; balance checked before transfer.
