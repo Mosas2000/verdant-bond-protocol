@@ -20,6 +20,7 @@ import {
 } from './interfaces/marketplace.interface';
 import { PaginatedResponse, PaginationDto } from '../common/dto/pagination.dto';
 import { toBigIntString } from '../common/utils';
+import { listSupportedQuoteAssets, QuoteAssetConfig } from './quote-assets';
 
 @Controller('marketplace')
 export class MarketplaceController {
@@ -28,6 +29,15 @@ export class MarketplaceController {
     private readonly liquidityService: LiquidityService,
     private readonly stellarService: StellarService,
   ) {}
+
+  /**
+   * The canonical quote asset registry (issue #92). The frontend fetches
+   * this instead of hardcoding its own asset list, so the two never drift.
+   */
+  @Get('quote-assets')
+  listQuoteAssets(): readonly QuoteAssetConfig[] {
+    return listSupportedQuoteAssets();
+  }
 
   @Get('orders')
   async listOrders(

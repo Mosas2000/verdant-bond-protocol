@@ -24,6 +24,7 @@ import { nativeToScVal, scValToNative, Address } from '@stellar/stellar-sdk';
 import { PaginatedResponse } from '../common/dto/pagination.dto';
 import { toBigIntString } from '../common/utils';
 import { ConfigService } from '../config/config.service';
+import { normalizeQuoteAssetSymbol } from './quote-assets';
 
 
 
@@ -180,16 +181,21 @@ export class DexService {
     address: string,
     asset: QuoteAsset = 'USDC',
   ): Promise<QuoteBalanceResponse> {
+    // Callers that reach here without going through a DTO's @IsQuoteAssetSymbol
+    // (e.g. the default above, or an internal caller) still get the same
+    // registry check + canonical casing before we build the contract call.
+    const normalizedAsset = normalizeQuoteAssetSymbol(asset);
+
     const balanceScVal = await this.contractService.simulateCall({
       contractAddress: this.configService.getDexRouterAddress(),
       method: 'get_quote_balance',
       args: [
         Address.fromString(address).toScVal(),
-        nativeToScVal(asset, { type: 'symbol' }),
+        nativeToScVal(normalizedAsset, { type: 'symbol' }),
       ],
     });
     const balance = toBigIntString(scValToNative(balanceScVal));
-    return { address, asset, balance };
+    return { address, asset: normalizedAsset, balance };
   }
 
   async depositQuote(
@@ -230,16 +236,6 @@ export class DexService {
     );
 
     return { address: callerAddress, asset: dto.asset, amount: dto.amount, transactionHash };
-  }
-
-  private async invalidateOrdersCache(): Promise<void> {
-    const keys: string[] = [];
-    for await (const key of this.redis.scanIterator({ MATCH: 'orders:*' })) {
-      keys.push(key);
-    }
-    if (keys.length > 0) {
-      await this.redis.del(keys);
-    }
   }
 
   private decodeOrder(data: any[]): OrderResponse {
