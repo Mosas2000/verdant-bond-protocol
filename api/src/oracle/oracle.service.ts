@@ -19,6 +19,7 @@ import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { nativeToScVal, scValToNative, Address, xdr } from '@stellar/stellar-sdk';
 import { StellarService } from '../stellar/stellar.service';
+import { toBigIntString } from '../common/utils';
 
 const ORACLE_CONSUMER = () => process.env.ORACLE_CONSUMER_ADDRESS || '';
 
@@ -69,7 +70,7 @@ export class OracleService {
       projectId: dto.projectId,
       periodStart: dto.periodStart,
       periodEnd: dto.periodEnd,
-      carbonSequestered: dto.carbonSequestered,
+      carbonSequestered: toBigIntString(dto.carbonSequestered),
       methodology: dto.methodology,
       ipfsHash: ipfsResult.hash,
       providerAddress,
@@ -220,8 +221,8 @@ export class OracleService {
       reportsSubmitted: Number(this.field(stats, 'reports_submitted', 0)),
       challengesFaced: Number(this.field(stats, 'challenges_faced', 1)),
       slashes: Number(this.field(stats, 'slashes', 2)),
-      totalPenalty: Number(this.field(stats, 'total_penalty', 3)),
-      stake: Number(this.field(stats, 'stake', 4)),
+      totalPenalty: toBigIntString(this.field(stats, 'total_penalty', 3)),
+      stake: toBigIntString(this.field(stats, 'stake', 4)),
       active: Boolean(this.field(stats, 'active', 5)),
       slashHistory,
       challengeHistory,
@@ -253,8 +254,8 @@ export class OracleService {
   private decodeSlashRecord(record: Record<string, any>): SlashRecord {
     return {
       reportId: Number(this.field(record, 'report_id', 0)),
-      penalty: Number(this.field(record, 'penalty', 1)),
-      remainingStake: Number(this.field(record, 'remaining_stake', 2)),
+      penalty: toBigIntString(this.field(record, 'penalty', 1)),
+      remainingStake: toBigIntString(this.field(record, 'remaining_stake', 2)),
       timestamp: new Date(Number(this.field(record, 'timestamp', 3)) * 1000).toISOString(),
       activeAfter: Boolean(this.field(record, 'active_after', 4)),
     };
@@ -300,7 +301,7 @@ export class OracleService {
       projectId: Buffer.from(data[2] as Uint8Array).toString('hex'),
       periodStart: Number(data[3]),
       periodEnd: Number(data[4]),
-      carbonSequestered: Number(data[5]),
+      carbonSequestered: toBigIntString(data[5]),
       methodology: data[6] as string,
       ipfsHash: Buffer.from(data[7] as Uint8Array).toString('hex'),
       status: this.reportStatusFromIndex(Number(data[8])),

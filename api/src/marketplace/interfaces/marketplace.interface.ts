@@ -12,8 +12,8 @@ export interface OrderResponse {
   id: number;
   seller: string;
   bondId: number;
-  amount: number;
-  pricePerToken: number;
+  amount: string;
+  pricePerToken: string;
   quoteAsset: QuoteAsset;
   status: OrderStatus;
   createdAt: string;
@@ -22,7 +22,7 @@ export interface OrderResponse {
 export interface QuoteBalanceResponse {
   address: string;
   asset: QuoteAsset;
-  balance: number;
+  balance: string;
 }
 
 export interface QuoteTransactionResponse {
@@ -34,22 +34,27 @@ export interface QuoteTransactionResponse {
 
 export interface PriceFeedResponse {
   bondId: number;
-  bestPrice: number;
-  averagePrice: number;
+  bestPrice: string;
+  averagePrice: string;
   totalOrders: number;
-  totalVolume: number;
+  totalVolume: string;
 }
 
 export interface PriceLevel {
-  price: number;
-  amount: number;
-  total: number;
+  price: string;
+  amount: string;
+  total: string;
 }
+
+export type FillabilityStatus = 'fully_fillable' | 'partially_fillable' | 'unfillable';
 
 export interface SlippageResponse {
   bondId: number;
-  amount: number;
-  averagePrice: number;
-  estimatedTotal: number;
+  requestedAmount: string;
+  fillableAmount: string;
+  unfilledAmount: string;
+  averagePrice: string;
+  estimatedTotal: string;
   slippagePercent: number;
+  fillabilityStatus: FillabilityStatus;
 }

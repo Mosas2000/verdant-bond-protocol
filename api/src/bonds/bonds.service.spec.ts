@@ -168,7 +168,7 @@ describe('BondsService', () => {
       expect(options.contractAddress).toBe('');
       expect(options.method).toBe('get_undistributed_total');
       expect(options.args).toEqual([nativeToScVal(BigInt(3), { type: 'u64' })]);
-      expect(result).toEqual({ bondId: 3, undistributedTotal: 42 });
+      expect(result).toEqual({ bondId: 3, undistributedTotal: '42' });
     });
   });
 
@@ -194,13 +194,13 @@ describe('BondsService', () => {
       jest.spyOn(svc, 'findOne').mockImplementation(async (id) => ({
         id,
         projectId: '',
-        faceValue: 0,
+        faceValue: '0',
         couponSchedule: [],
         creditType: CreditTypeEnum.Carbon,
         maturityDate: 0,
         maturityStatus: BondMaturityStatusEnum.Active,
-        totalSupply: 0,
-        totalSubscribed: 0,
+        totalSupply: '0',
+        totalSubscribed: '0',
         status: BondStatusEnum.Active,
         createdAt: '',
       }));
@@ -211,7 +211,7 @@ describe('BondsService', () => {
 
       expect(result).toHaveLength(1);
       expect(result[0].id).toBe(1);
-      expect(result[0].balance).toBe(25);
+      expect(result[0].balance).toBe('25');
     });
   });
 
@@ -260,7 +260,7 @@ describe('BondsService', () => {
       );
       expect(scValToNative(args[1])).toBe(BigInt(3));
       expect(nonce).toBe(0);
-      expect(result).toEqual({ bondId: 3, swept: 42, transactionHash: '0xabc' });
+      expect(result).toEqual({ bondId: 3, swept: '42', transactionHash: '0xabc' });
     });
   });
 
