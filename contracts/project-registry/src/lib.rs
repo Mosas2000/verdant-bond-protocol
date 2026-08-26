@@ -11,6 +11,7 @@ pub enum DataKey {
     ProjectId(u64),
     Nonce(Address),
     OwnerProjects(Address),
+    ProjectDocuments(u64),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -273,6 +274,29 @@ impl ProjectRegistry {
         env.storage()
             .instance()
             .get(&DataKey::OwnerProjects(owner))
+            .unwrap_or(vec![&env])
+    }
+
+    pub fn add_project_documents(
+        env: Env,
+        project_id: u64,
+        document_hashes: Vec<BytesN<32>>,
+    ) -> Result<(), RegistryError> {
+        if document_hashes.len() > MAX_DOCUMENTS as usize {
+            return Err(RegistryError::InvalidArgument);
+        }
+        let key = DataKey::ProjectDocuments(project_id);
+        env.storage()
+            .instance()
+            .set(&key, &document_hashes);
+        Ok(())
+    }
+
+    pub fn get_project_documents(env: Env, project_id: u64) -> Vec<BytesN<32>> {
+        let key = DataKey::ProjectDocuments(project_id);
+        env.storage()
+            .instance()
+            .get(&key)
             .unwrap_or(vec![&env])
     }
 
