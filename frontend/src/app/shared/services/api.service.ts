@@ -107,9 +107,11 @@ export class ApiService {
     return this.http.post<Project>('/api/projects', data, { headers: this.headers() });
   }
 
-  getOrders(bondId?: number): Observable<PaginatedResponse<Order>> {
+  getOrders(bondId?: number, refresh = false): Observable<PaginatedResponse<Order>> {
     const params: any = {};
     if (bondId) params.bondId = bondId;
+    // Bypass any client-side/proxy HTTP caching so a refresh always hits the server.
+    if (refresh) params._t = Date.now();
     return this.http.get<PaginatedResponse<Order>>('/api/marketplace/orders', {
       params, headers: this.headers(),
     });

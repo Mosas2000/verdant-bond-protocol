@@ -232,6 +232,16 @@ export class DexService {
     return { address: callerAddress, asset: dto.asset, amount: dto.amount, transactionHash };
   }
 
+  private async invalidateOrdersCache(): Promise<void> {
+    const keys: string[] = [];
+    for await (const key of this.redis.scanIterator({ MATCH: 'orders:*' })) {
+      keys.push(key);
+    }
+    if (keys.length > 0) {
+      await this.redis.del(keys);
+    }
+  }
+
   private decodeOrder(data: any[]): OrderResponse {
     return {
       id: Number(data[0]),
