@@ -1,12 +1,17 @@
 import {
-  Controller, Get, Post, Body, Param, Req,
-  HttpCode, HttpStatus, ParseIntPipe,
+  Controller, Get, Post, Body, Param, Query, Req,
+  HttpCode, HttpStatus, ParseIntPipe, UseGuards,
 } from '@nestjs/common';
 import { OracleService } from './oracle.service';
 import { OracleMonitoringService } from './oracle.monitoring.service';
+import { OracleIncidentRepository } from './oracle-incident.repository';
 import { SubmitReportDto } from './dto/submit-report.dto';
 import { ChallengeDto } from './dto/challenge.dto';
 import { RegisterProviderDto } from './dto/register-provider.dto';
+import { ListOracleIncidentsDto } from './dto/list-oracle-incidents.dto';
+import { ResolveOracleIncidentDto } from './dto/resolve-oracle-incident.dto';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { AdminGuard } from '../common/guards/admin.guard';
 import {
   ReportResponse,
   ChallengeResponse,
@@ -14,12 +19,15 @@ import {
   ProviderStatsWithHistory,
   OracleStalenessReport,
 } from './interfaces/oracle.interface';
+import { OracleIncident } from './interfaces/oracle-incident.interface';
+import { PaginatedResponse } from '../common/dto/pagination.dto';
 
 @Controller('oracle')
 export class OracleController {
   constructor(
     private readonly oracleService: OracleService,
     private readonly monitoringService: OracleMonitoringService,
+    private readonly incidents: OracleIncidentRepository,
   ) {}
 
   @Post('reports')
@@ -71,5 +79,42 @@ export class OracleController {
   @Get('monitoring/staleness')
   async staleness(): Promise<OracleStalenessReport> {
     return this.monitoringService.computeStaleness();
+  }
+
+  /**
+   * Operator-facing incident surface (issue #95). Admin-guarded like the
+   * other privileged actions in this API (e.g. `BondsController`'s
+   * `sweep-undistributed` and `admin.guard.ts`'s own doc comment): incident
+   * acknowledgement/resolution is operational state, not public data.
+   */
+  @Get('incidents')
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  async listIncidents(
+    @Query() query: ListOracleIncidentsDto,
+  ): Promise<PaginatedResponse<OracleIncident>> {
+    return this.incidents.findMany(query.page, query.limit, query.status);
+  }
+
+  @Post('incidents/:id/acknowledge')
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @HttpCode(HttpStatus.OK)
+  async acknowledgeIncident(
+    @Param('id') id: string,
+    @Req() req: any,
+  ): Promise<OracleIncident> {
+    const acknowledgedBy = req.headers['x-wallet-address'] as string || '';
+    return this.incidents.acknowledge(id, acknowledgedBy);
+  }
+
+  @Post('incidents/:id/resolve')
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @HttpCode(HttpStatus.OK)
+  async resolveIncident(
+    @Param('id') id: string,
+    @Body() dto: ResolveOracleIncidentDto,
+    @Req() req: any,
+  ): Promise<OracleIncident> {
+    const resolvedBy = req.headers['x-wallet-address'] as string || '';
+    return this.incidents.resolve(id, resolvedBy, dto.resolutionNote);
   }
 }
