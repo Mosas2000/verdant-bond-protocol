@@ -2,8 +2,9 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { ContractService } from '../stellar/contract.service';
 import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
+import { RedisService } from '../common/services/redis.service';
+import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { xdr, nativeToScVal, scValToNative, Address } from '@stellar/stellar-sdk';
-import { createClient, RedisClientType } from '@redis/client';
 import { CreateBondDto } from './dto/create-bond.dto';
 import { SubscribeDto } from './dto/subscribe.dto';
 import { DistributeCouponDto } from './dto/distribute-coupon.dto';
@@ -11,6 +12,7 @@ import { ClaimCreditsDto } from './dto/claim-credits.dto';
 import { TransferBondDto } from './dto/transfer-bond.dto';
 import {
   BondResponse,
+  HeldBondResponse,
   SubscriptionResponse,
   HolderListResponse,
   CouponDistributionResponse,
@@ -22,6 +24,7 @@ import {
   BondMaturityStatusEnum,
   CreditTypeEnum,
 } from './interfaces/bond.interface';
+import { toBigIntString } from '../common/utils';
 
 const BOND_ISSUER = () => process.env.BOND_ISSUER_ADDRESS || '';
 const COUPON_ENGINE = () => process.env.COUPON_ENGINE_ADDRESS || '';
@@ -41,16 +44,13 @@ const BOND_ERROR_CODE = {
 
 @Injectable()
 export class BondsService {
-  private redis: RedisClientType;
-
   constructor(
     private readonly contractService: ContractService,
     private readonly stellarService: StellarService,
     private readonly nonceService: NonceService,
-  ) {
-    this.redis = createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
-    this.redis.connect().catch(() => {});
-  }
+    private readonly redis: RedisService,
+    private readonly signingKeys: SigningKeyProvider,
+  ) {}
 
   async create(dto: CreateBondDto): Promise<BondResponse> {
     const adminSecret = this.getAdminSecret();
@@ -115,8 +115,42 @@ export class BondsService {
     return bond;
   }
 
+  async findHeldByAddress(address: string): Promise<HeldBondResponse[]> {
+    try {
+      Address.fromString(address);
+    } catch {
+      throw new BadRequestException('Invalid wallet address');
+    }
+
+    let total = 0;
+    try {
+      const countScVal = await this.contractService.simulateCall({
+        contractAddress: BOND_ISSUER(), method: 'bond_count', args: [],
+      });
+      total = Number(scValToNative(countScVal));
+    } catch {
+      return [];
+    }
+
+    const heldBonds: HeldBondResponse[] = [];
+    for (let id = 1; id <= total; id++) {
+      try {
+        const balanceScVal = await this.contractService.simulateCall({
+          contractAddress: BOND_ISSUER(), method: 'get_holder_balance',
+          args: [nativeToScVal(BigInt(id), { type: 'u64' }), Address.fromString(address).toScVal()],
+        });
+        const balance = toBigIntString(scValToNative(balanceScVal));
+        if (balance !== '0') {
+          heldBonds.push({ ...(await this.findOne(id)), balance });
+        }
+      } catch {}
+    }
+
+    return heldBonds;
+  }
+
   async subscribe(id: number, dto: SubscribeDto): Promise<SubscriptionResponse> {
-    const investorSecret = process.env.INVESTOR_SECRET_KEY || '';
+    const investorSecret = this.signingKeys.investorSecret();
     const nonce = await this.nonceService.next(BOND_ISSUER(), dto.investorAddress);
     const { transactionHash } = await this.contractService.invokeContractMethod(
       BOND_ISSUER(), 'subscribe', investorSecret,
@@ -131,7 +165,7 @@ export class BondsService {
     await this.redis.del(`bond:${id}`);
     await this.redis.sAdd(`bond:${id}:holders`, dto.investorAddress);
 
-    return { bondId: id, investorAddress: dto.investorAddress, amount: dto.amount, transactionHash: transactionHash || '' };
+    return { bondId: id, investorAddress: dto.investorAddress, amount: toBigIntString(dto.amount), transactionHash: transactionHash || '' };
   }
 
   async getHolders(id: number): Promise<HolderListResponse> {
@@ -144,8 +178,8 @@ export class BondsService {
           contractAddress: BOND_ISSUER(), method: 'get_holder_balance',
           args: [nativeToScVal(BigInt(id), { type: 'u64' }), Address.fromString(address).toScVal()],
         });
-        const balance = Number(scValToNative(balanceScVal));
-        if (balance > 0) holders.push({ address, balance });
+        const balance = toBigIntString(scValToNative(balanceScVal));
+        if (balance !== '0') holders.push({ address, balance });
       } catch {}
     }
 
@@ -175,13 +209,13 @@ export class BondsService {
     return {
       bondId: id,
       periodIndex: dto.periodIndex,
-      totalCredits: Number(parsed?.[2] ?? 0),
+      totalCredits: toBigIntString(parsed?.[2] ?? 0),
       holderCount: Number(parsed?.[3] ?? 0),
     };
   }
 
   async claimCredits(id: number, dto: ClaimCreditsDto): Promise<ClaimCreditsResponse> {
-    const investorSecret = process.env.INVESTOR_SECRET_KEY || '';
+    const investorSecret = this.signingKeys.investorSecret();
     const nonce = await this.nonceService.next(COUPON_ENGINE(), dto.investorAddress);
 
     const { result, transactionHash } = await this.contractService.invokeContractMethod(
@@ -196,13 +230,13 @@ export class BondsService {
     return {
       bondId: id,
       investorAddress: dto.investorAddress,
-      credits: Number(scValToNative(result)),
+      credits: toBigIntString(scValToNative(result)),
       transactionHash: transactionHash || '',
     };
   }
 
   async transfer(id: number, dto: TransferBondDto): Promise<TransferResponse> {
-    const investorSecret = process.env.INVESTOR_SECRET_KEY || '';
+    const investorSecret = this.signingKeys.investorSecret();
     const nonce = await this.nonceService.next(BOND_ISSUER(), dto.fromAddress);
 
     const { transactionHash } = await this.contractService.invokeContractMethod(
@@ -222,7 +256,7 @@ export class BondsService {
       bondId: id,
       fromAddress: dto.fromAddress,
       toAddress: dto.toAddress,
-      amount: dto.amount,
+      amount: toBigIntString(dto.amount),
       transactionHash: transactionHash || '',
     };
   }
@@ -235,7 +269,7 @@ export class BondsService {
 
     return {
       bondId: id,
-      undistributedTotal: Number(scValToNative(resultScVal)),
+      undistributedTotal: toBigIntString(scValToNative(resultScVal)),
     };
   }
 
@@ -255,7 +289,7 @@ export class BondsService {
 
     return {
       bondId: id,
-      swept: Number(scValToNative(result)),
+      swept: toBigIntString(scValToNative(result)),
       transactionHash: transactionHash || '',
     };
   }
@@ -314,13 +348,13 @@ export class BondsService {
     return {
       id,
       projectId: Buffer.from(config[0] as Uint8Array).toString('hex'),
-      faceValue: Number(config[1]),
-      couponSchedule: (config[2] as any[]).map((v: bigint) => Number(v)),
+      faceValue: toBigIntString(config[1]),
+      couponSchedule: (config[2] as any[]).map((v: bigint) => toBigIntString(v)),
       creditType: config[3] as CreditTypeEnum,
       maturityDate,
       maturityStatus,
-      totalSupply: Number(config[5]),
-      totalSubscribed: Number(state[0]),
+      totalSupply: toBigIntString(config[5]),
+      totalSubscribed: toBigIntString(state[0]),
       status,
       createdAt: new Date(Number(state[2]) * 1000).toISOString(),
     };
@@ -348,6 +382,6 @@ export class BondsService {
   }
 
   private getAdminSecret(): string {
-    return process.env.ADMIN_SECRET_KEY || '';
+    return this.signingKeys.adminSecret();
   }
 }
