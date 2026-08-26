@@ -18,7 +18,7 @@ import {
   QuoteTransactionResponse,
   SlippageResponse,
 } from './interfaces/marketplace.interface';
-import { PaginatedResponse } from '../common/dto/pagination.dto';
+import { PaginatedResponse, PaginationDto } from '../common/dto/pagination.dto';
 import { toBigIntString } from '../common/utils';
 
 @Controller('marketplace')
@@ -33,14 +33,13 @@ export class MarketplaceController {
   async listOrders(
     @Query('bondId') bondId?: number,
     @Query('status') status?: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query() pagination: PaginationDto = new PaginationDto(),
   ): Promise<PaginatedResponse<OrderResponse>> {
     return this.dexService.listOrders(
       bondId ? Number(bondId) : undefined,
       status,
-      page || 1,
-      limit || 20,
+      pagination.page ?? 1,
+      pagination.limit ?? 20,
     );
   }
 
