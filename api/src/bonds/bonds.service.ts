@@ -57,7 +57,7 @@ export class BondsService {
 
     const configScVal = this.encodeBondConfig(dto);
 
-    const { result } = await this.contractService.invokeContractMethod(
+    const { result, transactionHash } = await this.contractService.invokeContractMethod(
       this.configService.getBondIssuerAddress(), 'issue_bond', adminSecret,
       [Address.fromString(adminAddress).toScVal(), configScVal],
       nonce,
@@ -66,7 +66,7 @@ export class BondsService {
     const bondId = Number(scValToNative(result));
     const bond = await this.buildBondResponse(bondId);
     await this.redis.setEx(`bond:${bondId}`, 300, JSON.stringify(bond));
-    return bond;
+    return { ...bond, transactionHash };
   }
 
   async findAll(page = 1, limit = 20) {

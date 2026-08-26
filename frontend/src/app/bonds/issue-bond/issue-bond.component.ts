@@ -4,6 +4,12 @@ import { RouterModule, Router } from '@angular/router';
 import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ApiService } from '../../shared/services/api.service';
 import { appErrorMessage } from '../../shared/errors/api-error';
+import { PendingTransactionsService } from '../../shared/services/pending-transactions.service';
+import {
+  couponScheduleGroupValidator,
+  parseCouponSchedule,
+  toEpochSeconds,
+} from '../../shared/validators/coupon-schedule.validators';
 
 @Component({
   selector: 'app-issue-bond',
@@ -69,8 +75,20 @@ import { appErrorMessage } from '../../shared/errors/api-error';
         <div class="form-group">
           <label class="form-label" for="couponSchedule">Coupon Schedule</label>
           <input id="couponSchedule" class="form-input" formControlName="couponSchedule" placeholder="Comma-separated epoch seconds, e.g. 1750000000, 1781536000" />
-          @if (form.get('couponSchedule')?.invalid && form.get('couponSchedule')?.touched) {
+          @if (form.get('couponSchedule')?.hasError('required') && form.get('couponSchedule')?.touched) {
             <span class="form-error">Enter at least one coupon date</span>
+          }
+          @if (form.errors?.['couponEmpty'] && form.get('couponSchedule')?.touched) {
+            <span class="form-error">Enter at least one valid coupon date</span>
+          }
+          @if (form.errors?.['couponPast'] && form.get('couponSchedule')?.touched) {
+            <span class="form-error">All coupon dates must be in the future</span>
+          }
+          @if (form.errors?.['couponUnordered'] && form.get('couponSchedule')?.touched) {
+            <span class="form-error">Coupon dates must be strictly ascending with no duplicates</span>
+          }
+          @if (form.errors?.['couponAfterMaturity'] && form.get('couponSchedule')?.touched) {
+            <span class="form-error">All coupon dates must be before the maturity date</span>
           }
         </div>
 
@@ -111,19 +129,23 @@ export class IssueBondComponent {
   private readonly fb = inject(FormBuilder);
   private readonly apiService = inject(ApiService);
   private readonly router = inject(Router);
+  private readonly pendingTx = inject(PendingTransactionsService);
 
   readonly submitting = signal(false);
   readonly error = signal('');
   readonly success = signal(false);
 
-  form: FormGroup = this.fb.group({
-    projectId: ['', Validators.required],
-    faceValue: [null, [Validators.required, Validators.min(1)]],
-    creditType: ['Carbon', Validators.required],
-    totalSupply: [1000, [Validators.required, Validators.min(1)]],
-    maturityDate: ['', Validators.required],
-    couponSchedule: ['', Validators.required],
-  });
+  form: FormGroup = this.fb.group(
+    {
+      projectId: ['', Validators.required],
+      faceValue: [null, [Validators.required, Validators.min(1)]],
+      creditType: ['Carbon', Validators.required],
+      totalSupply: [1000, [Validators.required, Validators.min(1)]],
+      maturityDate: ['', Validators.required],
+      couponSchedule: ['', Validators.required],
+    },
+    { validators: couponScheduleGroupValidator() },
+  );
 
   onSubmit(): void {
     if (this.form.invalid) return;
@@ -132,15 +154,14 @@ export class IssueBondComponent {
     this.success.set(false);
 
     const formValue = { ...this.form.value };
-    formValue.maturityDate = new Date(formValue.maturityDate).getTime();
-    formValue.couponSchedule = String(formValue.couponSchedule || '')
-      .split(',')
-      .map((v: string) => Number(v.trim()))
-      .filter((v: number) => Number.isFinite(v) && v > 0);
-    formValue.maturityDate = new Date(formValue.maturityDate).getTime();
+    // Epoch seconds throughout — matches the contract's env.ledger().timestamp()
+    // and the coupon schedule values (see coupon-schedule.validators.ts).
+    formValue.maturityDate = toEpochSeconds(formValue.maturityDate);
+    formValue.couponSchedule = parseCouponSchedule(formValue.couponSchedule);
 
     this.apiService.issueBond(formValue).subscribe({
-      next: () => {
+      next: (res) => {
+        this.pendingTx.register(res.transactionHash, 'issue');
         this.success.set(true);
         this.submitting.set(false);
         setTimeout(() => this.router.navigate(['/bonds']), 1500);

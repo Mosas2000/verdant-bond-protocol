@@ -5,6 +5,7 @@ import { of } from 'rxjs';
 import { MarketplaceSellComponent } from './marketplace-sell.component';
 import { ApiService } from '../../shared/services/api.service';
 import { WalletService } from '../../auth/wallet.service';
+import { PendingTransactionsService } from '../../shared/services/pending-transactions.service';
 
 describe('MarketplaceSellComponent', () => {
   let component: MarketplaceSellComponent;
@@ -16,7 +17,7 @@ describe('MarketplaceSellComponent', () => {
         { id: 1, creditType: 'Carbon', balance: 25 },
         { id: 2, creditType: 'BlueCarbon', balance: 10 },
       ])),
-      listBondTokens: jasmine.createSpy('listBondTokens').and.returnValue(of({ id: 1 })),
+      listBondTokens: jasmine.createSpy('listBondTokens').and.returnValue(of({ id: 1, transactionHash: 'tx-list' })),
     };
 
     await TestBed.configureTestingModule({
@@ -25,6 +26,7 @@ describe('MarketplaceSellComponent', () => {
         provideRouter([]),
         { provide: ApiService, useValue: apiService },
         { provide: WalletService, useValue: { isConnected: signal(true), address: signal('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF') } },
+        { provide: PendingTransactionsService, useValue: jasmine.createSpyObj('PendingTransactionsService', ['register']) },
       ],
     }).compileComponents();
   });

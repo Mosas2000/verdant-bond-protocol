@@ -45,7 +45,7 @@ export class ProjectsService {
     const ownerSecret = this.signingKeys.userSecret();
     const nonce = await this.nonceService.next(this.configService.getProjectRegistryAddress(), ownerAddress);
 
-    const { result } = await this.contractService.invokeContractMethod(
+    const { result, transactionHash } = await this.contractService.invokeContractMethod(
       this.configService.getProjectRegistryAddress(), 'register_project', ownerSecret,
       [
         Address.fromString(ownerAddress).toScVal(),
@@ -61,7 +61,7 @@ export class ProjectsService {
 
     await this.redis.setEx(`project:${projectId}`, 300, JSON.stringify(project));
 
-    return project;
+    return { ...project, transactionHash };
   }
 
   async findAll(page = 1, limit = 20) {

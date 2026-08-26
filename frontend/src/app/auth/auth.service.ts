@@ -11,6 +11,11 @@ export class AuthService {
   readonly token = signal<string | null>(localStorage.getItem('nbs_access_token'));
   readonly isAuthenticated = computed(() => this.token() !== null);
 
+  /** True once both the wallet plugin is connected AND a JWT session exists.
+   *  Single source of truth for gating protected routes/actions (see
+   *  auth/guards/wallet-auth.guard.ts). */
+  readonly sessionReady = computed(() => this.isAuthenticated() && this.walletService.isConnected());
+
   async login(): Promise<void> {
     const address = this.walletService.address();
     if (!address) throw new Error('Wallet not connected');

@@ -1,10 +1,13 @@
 import { ComponentFixture, TestBed, fakeAsync, tick, discardPeriodicTasks } from '@angular/core/testing';
+import { signal } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { ActivatedRoute } from '@angular/router';
 import { of } from 'rxjs';
 import { BondDetailComponent } from './bond-detail.component';
 import { ApiService } from '../../shared/services/api.service';
 import { WalletService } from '../../auth/wallet.service';
+import { AuthService } from '../../auth/auth.service';
+import { PendingTransactionsService } from '../../shared/services/pending-transactions.service';
 import { Bond } from '../../shared/interfaces/bond.interface';
 import { environment } from '../../../environments/environment';
 
@@ -12,6 +15,7 @@ describe('BondDetailComponent', () => {
   let fixture: ComponentFixture<BondDetailComponent>;
   let apiService: jasmine.SpyObj<ApiService>;
   let walletService: WalletService;
+  let sessionReady: ReturnType<typeof signal<boolean>>;
 
   const bond = {
     id: 1,
@@ -49,6 +53,8 @@ describe('BondDetailComponent', () => {
       of({ bondId: 1, swept: 7, transactionHash: '0xabc' }),
     );
 
+    sessionReady = signal(true); // existing tests expect an authenticated session, matching prior behavior
+
     await TestBed.configureTestingModule({
       imports: [BondDetailComponent],
       providers: [
@@ -58,6 +64,8 @@ describe('BondDetailComponent', () => {
           useValue: { snapshot: { paramMap: { get: () => '1' } } },
         },
         { provide: ApiService, useValue: apiService },
+        { provide: AuthService, useValue: { sessionReady } },
+        { provide: PendingTransactionsService, useValue: jasmine.createSpyObj('PendingTransactionsService', ['register']) },
         WalletService,
       ],
     }).compileComponents();
@@ -179,6 +187,20 @@ describe('BondDetailComponent', () => {
     expect(fixture.nativeElement.textContent).toContain('frozen for trading');
     expect(fixture.nativeElement.querySelector('.subscribe-btn')).toBeNull();
     expect(fixture.nativeElement.querySelector('.transfer-btn')).toBeNull();
+    discardPeriodicTasks();
+  }));
+
+  it('disables subscribe/claim/transfer and shows a hint when the session is not ready', fakeAsync(() => {
+    sessionReady.set(false);
+    createFixture();
+
+    const subscribeBtn = fixture.nativeElement.querySelector('.subscribe-btn') as HTMLButtonElement;
+    const claimBtn = fixture.nativeElement.querySelector('.claim-btn') as HTMLButtonElement;
+    const transferBtn = fixture.nativeElement.querySelector('.transfer-btn') as HTMLButtonElement;
+    expect(subscribeBtn.disabled).toBe(true);
+    expect(claimBtn.disabled).toBe(true);
+    expect(transferBtn.disabled).toBe(true);
+    expect(fixture.nativeElement.textContent).toContain('Connect your wallet and sign in');
     discardPeriodicTasks();
   }));
 

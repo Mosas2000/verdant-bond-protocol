@@ -10,6 +10,7 @@ import {
   UndistributedTotalResponse, SweepUndistributedResponse,
   QuoteBalanceResponse, QuoteTransactionResponse,
   QuoteAsset, DepositQuoteDto, WithdrawQuoteDto,
+  TransactionStatusResponse,
 } from '../interfaces/bond.interface';
 
 @Injectable({ providedIn: 'root' })
@@ -121,8 +122,14 @@ export class ApiService {
     return this.http.post<Order>('/api/marketplace/list', data, { headers: this.headers() });
   }
 
-  buyBondTokens(data: BuyBondDto): Observable<void> {
-    return this.http.post<void>('/api/marketplace/buy', data, { headers: this.headers() });
+  buyBondTokens(data: BuyBondDto): Observable<Order> {
+    return this.http.post<Order>('/api/marketplace/buy', data, { headers: this.headers() });
+  }
+
+  getTransactionStatus(hash: string): Observable<TransactionStatusResponse> {
+    return this.http.get<TransactionStatusResponse>(`/api/stellar/transactions/${hash}`, {
+      headers: this.headers(),
+    });
   }
 
   getQuoteBalance(asset: QuoteAsset = 'USDC'): Observable<QuoteBalanceResponse> {

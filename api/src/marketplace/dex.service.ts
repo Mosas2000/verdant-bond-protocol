@@ -90,7 +90,7 @@ export class DexService {
     const adminSecret = this.getAdminSecret();
     const nonce = await this.nonceService.next(this.configService.getDexRouterAddress(), sellerAddress);
 
-    const { result } = await this.contractService.invokeContractMethod(
+    const { result, transactionHash } = await this.contractService.invokeContractMethod(
       this.configService.getDexRouterAddress(), 'list_bond_tokens', adminSecret,
       [
         Address.fromString(sellerAddress).toScVal(),
@@ -106,7 +106,8 @@ export class DexService {
     const orderId = Number(scValToNative(result));
     await this.redis.delPattern(`orders:*`);
     await this.redis.del(`order:${orderId}`);
-    return this.getOrder(orderId);
+    const order = await this.getOrder(orderId);
+    return { ...order, transactionHash };
   }
 
   async buyBondTokens(dto: BuyBondDto, buyerAddress: string): Promise<OrderResponse> {
@@ -124,8 +125,9 @@ export class DexService {
     const adminSecret = this.getAdminSecret();
     const nonce = await this.nonceService.next(this.configService.getDexRouterAddress(), buyerAddress);
 
+    let transactionHash: string | undefined;
     try {
-      await this.contractService.invokeContractMethod(
+      ({ transactionHash } = await this.contractService.invokeContractMethod(
         this.configService.getDexRouterAddress(), 'execute_purchase', adminSecret,
         [
           Address.fromString(buyerAddress).toScVal(),
@@ -134,14 +136,15 @@ export class DexService {
           nativeToScVal(BigInt(dto.amount), { type: 'i128' }),
         ],
         nonce,
-      );
+      ));
     } catch (error) {
       throw this.mapDexError(error);
     }
 
     await this.redis.delPattern(`orders:*`);
     await this.redis.del(`order:${dto.orderId}`);
-    return this.getOrder(dto.orderId);
+    const updatedOrder = await this.getOrder(dto.orderId);
+    return { ...updatedOrder, transactionHash };
   }
 
   async cancelOrder(orderId: number, callerAddress: string): Promise<void> {

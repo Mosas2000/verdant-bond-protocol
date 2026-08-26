@@ -24,6 +24,9 @@ export interface OrderResponse {
   quoteAsset: QuoteAsset;
   status: OrderStatus;
   createdAt: string;
+  /** Only present on the response to a just-submitted buy (see
+   *  DexService.buyBondTokens); absent on reads from getOrder(). */
+  transactionHash?: string;
 }
 
 export interface QuoteBalanceResponse {

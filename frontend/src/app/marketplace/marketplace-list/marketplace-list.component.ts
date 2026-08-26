@@ -12,6 +12,7 @@ import { LoadingSpinnerComponent } from '../../shared/components/loading-spinner
 import { QuoteBalanceComponent, QuoteBalances } from '../../shared/components/quote-balance/quote-balance.component';
 import { Order, Bond, QuoteAsset } from '../../shared/interfaces/bond.interface';
 import { appErrorMessage } from '../../shared/errors/api-error';
+import { PendingTransactionsService } from '../../shared/services/pending-transactions.service';
 
 @Component({
   selector: 'app-marketplace-list',
@@ -126,9 +127,12 @@ import { appErrorMessage } from '../../shared/errors/api-error';
                                   </div>
                                 }
                                 <div class="buy-actions">
-                                  <button class="btn btn-sm btn-primary" (click)="onBuy(order)" [disabled]="buySubmitting() || !canConfirm(order)">Confirm</button>
+                                  <button class="btn btn-sm btn-primary" (click)="onBuy(order)" [disabled]="buySubmitting() || !canConfirm(order) || !authService.sessionReady()">Confirm</button>
                                   <button class="btn btn-sm btn-outline" (click)="cancelBuy()">Cancel</button>
                                 </div>
+                                @if (!authService.sessionReady()) {
+                                  <span class="auth-hint">Connect your wallet and sign in to buy.</span>
+                                }
                                 @if (buyError()) {
                                   <div class="error-msg">{{ buyError() }}</div>
                                 }
@@ -225,6 +229,7 @@ import { appErrorMessage } from '../../shared/errors/api-error';
     .sufficient-msg { color: #22c55e; }
     .insufficient-msg { color: #ef4444; }
     .error-msg { font-size: 0.75rem; color: #ef4444; }
+    .auth-hint { font-size: 0.75rem; color: #92400e; background: #fffbeb; padding: 4px 8px; border-radius: 6px; }
   `],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
@@ -234,6 +239,7 @@ export class MarketplaceListComponent implements OnInit, OnDestroy {
   private readonly router = inject(Router);
   readonly authService = inject(AuthService);
   readonly walletService = inject(WalletService);
+  private readonly pendingTx = inject(PendingTransactionsService);
 
   readonly orders = signal<Order[]>([]);
   readonly bonds = signal<Bond[]>([]);
@@ -419,7 +425,8 @@ export class MarketplaceListComponent implements OnInit, OnDestroy {
       amount: this.buyAmount,
       maxPrice: this.buyMaxPrice,
     }).subscribe({
-      next: () => {
+      next: (res) => {
+        this.pendingTx.register(res.transactionHash, 'buy');
         this.buyOrderId.set(null);
         this.buySubmitting.set(false);
         this.quotePanel?.loadBalances();

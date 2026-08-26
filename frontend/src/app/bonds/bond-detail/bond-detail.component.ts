@@ -4,10 +4,13 @@ import { RouterModule, ActivatedRoute } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { ApiService } from '../../shared/services/api.service';
 import { WalletService } from '../../auth/wallet.service';
+import { AuthService } from '../../auth/auth.service';
 import { StatusBadgeComponent } from '../../shared/components/status-badge/status-badge.component';
 import { LoadingSpinnerComponent } from '../../shared/components/loading-spinner/loading-spinner.component';
 import { Bond } from '../../shared/interfaces/bond.interface';
 import { environment } from '../../../environments/environment';
+import { PendingTransactionsService } from '../../shared/services/pending-transactions.service';
+import { appErrorMessage } from '../../shared/errors/api-error';
 
 @Component({
   selector: 'app-bond-detail',
@@ -106,11 +109,14 @@ import { environment } from '../../../environments/environment';
                   />
                   <button
                     class="btn btn-primary subscribe-btn"
-                    [disabled]="!subscribeAmount || subscribeAmount < 1 || subscribeSubmitting()"
+                    [disabled]="!subscribeAmount || subscribeAmount < 1 || subscribeSubmitting() || !authService.sessionReady()"
                     (click)="onSubscribe()"
                   >
                     {{ subscribeSubmitting() ? 'Subscribing...' : 'Subscribe' }}
                   </button>
+                  @if (!authService.sessionReady()) {
+                    <p class="auth-hint">Connect your wallet and sign in to subscribe.</p>
+                  }
                   @if (subscribeSuccess()) {
                     <div class="success-msg">Subscribed! Tx: {{ subscribeTx() }}</div>
                   }
@@ -131,11 +137,14 @@ import { environment } from '../../../environments/environment';
               <h3 class="section-title">Claim Credits</h3>
               <button
                 class="btn btn-primary claim-btn"
-                [disabled]="claimSubmitting()"
+                [disabled]="claimSubmitting() || !authService.sessionReady()"
                 (click)="onClaim()"
               >
                 {{ claimSubmitting() ? 'Claiming...' : 'Claim Accrued Credits' }}
               </button>
+              @if (!authService.sessionReady()) {
+                <p class="auth-hint">Connect your wallet and sign in to claim credits.</p>
+              }
               @if (claimSuccess()) {
                 <div class="success-msg">
                   Claimed {{ claimCredits() }} credits! Tx: {{ claimTx() }}
@@ -171,11 +180,14 @@ import { environment } from '../../../environments/environment';
                   />
                   <button
                     class="btn btn-primary transfer-btn"
-                    [disabled]="!transferTo || !transferAmount || transferAmount < 1 || transferSubmitting()"
+                    [disabled]="!transferTo || !transferAmount || transferAmount < 1 || transferSubmitting() || !authService.sessionReady()"
                     (click)="onTransfer()"
                   >
                     {{ transferSubmitting() ? 'Transferring...' : 'Transfer' }}
                   </button>
+                  @if (!authService.sessionReady()) {
+                    <p class="auth-hint">Connect your wallet and sign in to transfer.</p>
+                  }
                   @if (transferSuccess()) {
                     <div class="success-msg">
                       Transferred {{ transferAmount }} tokens to {{ transferTo }}! Tx: {{ transferTx() }}
@@ -201,11 +213,14 @@ import { environment } from '../../../environments/environment';
                   </div>
                   <button
                     class="btn btn-primary sweep-btn"
-                    [disabled]="undistributed() === 0 || sweepSubmitting()"
+                    [disabled]="undistributed() === 0 || sweepSubmitting() || !authService.sessionReady()"
                     (click)="onSweep()"
                   >
                     {{ sweepSubmitting() ? 'Sweeping...' : 'Sweep Undistributed' }}
                   </button>
+                  @if (!authService.sessionReady()) {
+                    <p class="auth-hint">Connect your wallet and sign in to sweep.</p>
+                  }
                 } @else if (undistributedError()) {
                   <div class="error-msg">{{ undistributedError() }}</div>
                 } @else {
@@ -263,6 +278,7 @@ import { environment } from '../../../environments/environment';
     .form-input { padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.875rem; outline: none; }
     .form-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,0.15); }
     .status-notice { font-size: 0.8125rem; color: #6b7280; padding: 8px 0; }
+    .auth-hint { font-size: 0.75rem; color: #92400e; background: #fffbeb; padding: 6px 10px; border-radius: 6px; margin: 0; }
     .btn { padding: 10px 20px; border-radius: 8px; font-size: 0.875rem; font-weight: 500; cursor: pointer; border: none; text-decoration: none; display: inline-block; text-align: center; }
     .btn-primary { background: #1a1a2e; color: #fff; }
     .btn-primary:hover:not(:disabled) { background: #2a2a4e; }
@@ -286,6 +302,8 @@ export class BondDetailComponent implements OnInit, OnDestroy {
   private readonly route = inject(ActivatedRoute);
   private readonly apiService = inject(ApiService);
   private readonly walletService = inject(WalletService);
+  private readonly pendingTx = inject(PendingTransactionsService);
+  readonly authService = inject(AuthService);
 
   readonly bond = signal<Bond | null>(null);
   readonly loading = signal(true);
@@ -338,9 +356,7 @@ export class BondDetailComponent implements OnInit, OnDestroy {
       this.apiService.getUndistributedTotal(b.id).subscribe({
         next: (res) => this.undistributed.set(res.undistributedTotal),
         error: (err) =>
-          this.undistributedError.set(
-            err.error?.detail || err.message || 'Failed to load undistributed total',
-          ),
+          this.undistributedError.set(appErrorMessage(err, 'Failed to load undistributed total')),
       });
     }
   }, { allowSignalWrites: true });
@@ -408,13 +424,14 @@ export class BondDetailComponent implements OnInit, OnDestroy {
       next: (res) => {
         this.subscribeSuccess.set(true);
         this.subscribeTx.set(res.transactionHash);
+        this.pendingTx.register(res.transactionHash, 'subscribe');
         this.subscribeSubmitting.set(false);
         this.apiService.getBond(b.id).subscribe({
           next: (updated) => this.bond.set(updated),
         });
       },
       error: (err) => {
-        this.subscribeError.set(err.error?.detail || err.message || 'Subscription failed');
+        this.subscribeError.set(appErrorMessage(err, 'Subscription failed'));
         this.subscribeSubmitting.set(false);
       },
     });
@@ -432,10 +449,11 @@ export class BondDetailComponent implements OnInit, OnDestroy {
         this.claimSuccess.set(true);
         this.claimCredits.set(res.credits);
         this.claimTx.set(res.transactionHash);
+        this.pendingTx.register(res.transactionHash, 'claim');
         this.claimSubmitting.set(false);
       },
       error: (err) => {
-        this.claimError.set(err.error?.detail || err.message || 'Claim failed');
+        this.claimError.set(appErrorMessage(err, 'Claim failed'));
         this.claimSubmitting.set(false);
       },
     });
@@ -452,12 +470,13 @@ export class BondDetailComponent implements OnInit, OnDestroy {
       next: (res) => {
         this.transferSuccess.set(true);
         this.transferTx.set(res.transactionHash);
+        this.pendingTx.register(res.transactionHash, 'transfer');
         this.transferSubmitting.set(false);
         this.transferTo = '';
         this.transferAmount = 0;
       },
       error: (err) => {
-        this.transferError.set(err.error?.detail || err.message || 'Transfer failed');
+        this.transferError.set(appErrorMessage(err, 'Transfer failed'));
         this.transferSubmitting.set(false);
       },
     });
@@ -482,11 +501,12 @@ export class BondDetailComponent implements OnInit, OnDestroy {
         this.sweepSuccess.set(true);
         this.sweepSwept.set(res.swept);
         this.sweepTx.set(res.transactionHash);
+        this.pendingTx.register(res.transactionHash, 'sweep');
         this.sweepSubmitting.set(false);
         this.undistributed.set(0);
       },
       error: (err) => {
-        this.sweepError.set(err.error?.detail || err.message || 'Sweep failed');
+        this.sweepError.set(appErrorMessage(err, 'Sweep failed'));
         this.sweepSubmitting.set(false);
       },
     });
