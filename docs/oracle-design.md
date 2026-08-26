@@ -6,6 +6,21 @@ Multi-source, multi-layer: Auditors + Satellite + IoT → OracleConsumer contrac
 ## Provider Lifecycle
 Register → Whitelisted → Submit Reports → Challenge Window → Verify/Reject
 
+## Report Status Machine
+
+```
+Pending ──(threshold met)──► Verified
+Pending ──(challenged)─────► Challenged
+Verified ──(challenged)────► Challenged
+Challenged ──(admin: Verified)──► Verified  (exonerated, no slash)
+Challenged ──(admin: Rejected)──► Rejected  (provider slashed 10%)
+```
+
+Key invariants:
+- Only `Pending` and `Verified` reports can be challenged.
+- The challenge window is measured from `submitted_at` for `Pending` reports, and from `verified_at` for `Verified` reports.
+- `CouponEngine.distribute_coupon` only accepts `Verified` reports. Reports in `Challenged` status block coupon distribution, holding coupons in escrow until the dispute is resolved.
+
 ## Report Format
 ```
 {
@@ -33,9 +48,10 @@ A report only reaches `Verified` status after **independent verifications** meet
 The admin can verify a report and it counts toward the threshold, but the submitting provider's own signature never does. Low-stake providers are rejected before their verification is recorded, so a self-registered provider cannot cheaply satisfy consensus for a colluding report.
 
 ## Challenge Mechanism
-- 72-hour window from submission
-- Any address can challenge with counter-evidence (IPFS hash)
+- 72-hour window from submission (for `Pending` reports) or from verification (for `Verified` reports)
+- Any address can challenge with counter-evidence (IPFS hash) while the report is `Pending` or `Verified`
 - Admin resolves via on-chain vote (`resolve_challenge`), settling the report to `Rejected` or `Verified`
+- While a report is `Challenged`, `CouponEngine.distribute_coupon` rejects it, holding coupons in escrow
 
 ## Staking & Slashing
 Providers stake collateral that is at risk if their reports are overturned:
@@ -72,5 +88,5 @@ log-based staleness alerting described in
 - Provider staking: committed collateral underwrites report quality; `add_stake` / `withdraw_stake` manage exposure
 - Slashing: a `Rejected` challenge resolution slashes 10% of stake; zero stake deactivates the provider
 - Signature threshold defaults to two independent qualifying sources, with minimum verifier stake required for provider votes
-- Coupon distributions consume only `Verified` reports (enforced by `CouponEngine`)
+- Coupon distributions consume only `Verified` reports (enforced by `CouponEngine`); reports in `Challenged` status are rejected, holding coupons in escrow during disputes
 - Multi-sig for high-value reports

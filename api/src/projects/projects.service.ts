@@ -8,6 +8,7 @@ import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { nativeToScVal, scValToNative, Address } from '@stellar/stellar-sdk';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { ProjectResponse, ProjectStatusEnum, DocumentUploadResponse } from './interfaces/project.interface';
+import { encodeCid, decodeCid, toBigIntString } from '../common/utils';
 
 const PROJECT_REGISTRY = () => process.env.PROJECT_REGISTRY_ADDRESS || '';
 
@@ -37,7 +38,7 @@ export class ProjectsService {
     };
 
     const ipfsResult = await this.ipfsService.uploadJson(metadata);
-    const ipfsHash = Buffer.from(ipfsResult.hash, 'hex');
+    const ipfsHash = encodeCid(ipfsResult.hash);
 
     const ownerSecret = this.signingKeys.userSecret();
     const nonce = await this.nonceService.next(PROJECT_REGISTRY(), ownerAddress);
@@ -159,7 +160,7 @@ export class ProjectsService {
 
     const project = scValToNative(projectScVal) as any[];
 
-    const metadataIpfsHash = Buffer.from(project[2] as Uint8Array).toString('hex');
+    const metadataIpfsHash = decodeCid(project[2] as Uint8Array);
     let metadata: any = {};
     try {
       metadata = await this.ipfsService.getContent(metadataIpfsHash);

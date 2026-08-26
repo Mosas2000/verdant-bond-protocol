@@ -51,6 +51,19 @@ fn require_admin(env: &Env, caller: &Address) -> Result<(), RegistryError> {
     Ok(())
 }
 
+fn get_nonce(env: &Env, addr: &Address) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::Nonce(addr.clone()))
+        .unwrap_or(0)
+}
+
+fn set_nonce(env: &Env, addr: &Address, nonce: u64) {
+    env.storage()
+        .instance()
+        .set(&DataKey::Nonce(addr.clone()), &nonce);
+}
+
 #[contract]
 pub struct ProjectRegistry;
 
@@ -261,6 +274,37 @@ impl ProjectRegistry {
             .instance()
             .get(&DataKey::OwnerProjects(owner))
             .unwrap_or(vec![&env])
+    }
+
+    pub fn set_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+        nonce: u64,
+    ) -> Result<(), RegistryError> {
+        current_admin.require_auth();
+
+        let expected_nonce = get_nonce(&env, &current_admin);
+        if nonce != expected_nonce {
+            return Err(RegistryError::InvalidNonce);
+        }
+        set_nonce(&env, &current_admin, expected_nonce + 1);
+
+        require_admin(&env, &current_admin)?;
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.events().publish(
+            (Symbol::new(&env, "admin_changed"),),
+            (current_admin, new_admin),
+        );
+
+        Ok(())
+    }
+
+    pub fn get_admin(env: Env) -> Result<Address, RegistryError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(RegistryError::NotInitialized)
     }
 }
 

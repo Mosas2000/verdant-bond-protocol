@@ -22,6 +22,7 @@ import {
 } from './interfaces/marketplace.interface';
 import { nativeToScVal, scValToNative, Address } from '@stellar/stellar-sdk';
 import { PaginatedResponse } from '../common/dto/pagination.dto';
+import { toBigIntString } from '../common/utils';
 
 const DEX_ROUTER = () => process.env.DEX_ROUTER_ADDRESS || '';
 
@@ -100,18 +101,19 @@ export class DexService {
     );
 
     const orderId = Number(scValToNative(result));
-    await this.redis.del(`orders:*`);
+    await this.redis.delPattern(`orders:*`);
+    await this.redis.del(`order:${orderId}`);
     return this.getOrder(orderId);
   }
 
   async buyBondTokens(dto: BuyBondDto, buyerAddress: string): Promise<OrderResponse> {
     const order = await this.getOrder(dto.orderId);
-    const proceeds = order.pricePerToken * dto.amount;
+    const proceeds = BigInt(order.pricePerToken) * BigInt(dto.amount);
 
     const escrowed = await this.getQuoteBalance(buyerAddress, order.quoteAsset);
-    if (escrowed.balance < proceeds) {
+    if (BigInt(escrowed.balance) < proceeds) {
       throw new BadRequestException(
-        `Insufficient escrowed ${order.quoteAsset}: required ${proceeds}, escrowed ${escrowed}. ` +
+        `Insufficient escrowed ${order.quoteAsset}: required ${proceeds}, escrowed ${escrowed.balance}. ` +
         'Call POST /marketplace/escrow/deposit before purchasing.',
       );
     }
@@ -134,7 +136,8 @@ export class DexService {
       throw this.mapDexError(error);
     }
 
-    await this.redis.del(`orders:*`);
+    await this.redis.delPattern(`orders:*`);
+    await this.redis.del(`order:${dto.orderId}`);
     return this.getOrder(dto.orderId);
   }
 
@@ -151,7 +154,8 @@ export class DexService {
       nonce,
     );
 
-    await this.redis.del(`orders:*`);
+    await this.redis.delPattern(`orders:*`);
+    await this.redis.del(`order:${orderId}`);
   }
 
   async getOrder(orderId: number): Promise<OrderResponse> {
@@ -182,7 +186,7 @@ export class DexService {
         nativeToScVal(asset, { type: 'symbol' }),
       ],
     });
-    const balance = Number(scValToNative(balanceScVal));
+    const balance = toBigIntString(scValToNative(balanceScVal));
     return { address, asset, balance };
   }
 
@@ -231,8 +235,8 @@ export class DexService {
       id: Number(data[0]),
       seller: data[1] as string,
       bondId: Number(data[2]),
-      amount: Number(data[3]),
-      pricePerToken: Number(data[4]),
+      amount: toBigIntString(data[3]),
+      pricePerToken: toBigIntString(data[4]),
       quoteAsset: data[5] as QuoteAsset,
       status: this.orderStatusFromIndex(Number(data[6])),
       createdAt: new Date(Number(data[7]) * 1000).toISOString(),
@@ -253,6 +257,46 @@ export class DexService {
 
   private getAdminSecret(): string {
     return this.signingKeys.adminSecret();
+  }
+
+  /**
+   * Invoke one bounded `clean_expired_orders` pass.
+   * Pass `startId` from the previous result's `nextStartId` (or `1` / `0` to begin).
+   * When `nextStartId` is `0`, the scan has reached `order_count`.
+   */
+  async cleanExpiredOrders(
+    startId = 1,
+    limit = 50,
+  ): Promise<{ cleaned: number; nextStartId: number }> {
+    const adminSecret = this.getAdminSecret();
+    const adminAddress = this.stellarService
+      .getKeypairFromSecret(adminSecret)
+      .publicKey();
+    const nonce = await this.nonceService.next(DEX_ROUTER(), adminAddress);
+
+    const { result } = await this.contractService.invokeContractMethod(
+      DEX_ROUTER(),
+      'clean_expired_orders',
+      adminSecret,
+      [
+        Address.fromString(adminAddress).toScVal(),
+        nativeToScVal(BigInt(startId), { type: 'u64' }),
+        nativeToScVal(limit, { type: 'u32' }),
+      ],
+      nonce,
+    );
+
+    const decoded = scValToNative(result) as { cleaned?: number; next_start_id?: number } | unknown[];
+    if (Array.isArray(decoded)) {
+      return {
+        cleaned: Number(decoded[0]),
+        nextStartId: Number(decoded[1]),
+      };
+    }
+    return {
+      cleaned: Number((decoded as any).cleaned ?? 0),
+      nextStartId: Number((decoded as any).next_start_id ?? 0),
+    };
   }
 
   private async getOrderCount(): Promise<number> {
