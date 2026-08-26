@@ -19,6 +19,7 @@ import {
   SlippageResponse,
 } from './interfaces/marketplace.interface';
 import { PaginatedResponse } from '../common/dto/pagination.dto';
+import { toBigIntString } from '../common/utils';
 
 @Controller('marketplace')
 export class MarketplaceController {
@@ -80,7 +81,7 @@ export class MarketplaceController {
     const address = req.headers['x-wallet-address'] as string || '';
     const asset = query.asset ?? 'USDC';
     const balanceStr = await this.stellarService.getBalance(address, asset);
-    return { address, asset, balance: Number(balanceStr) };
+    return { address, asset, balance: balanceStr };
   }
 
   @Post('deposit')

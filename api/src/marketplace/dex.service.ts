@@ -22,6 +22,7 @@ import {
 } from './interfaces/marketplace.interface';
 import { nativeToScVal, scValToNative, Address } from '@stellar/stellar-sdk';
 import { PaginatedResponse } from '../common/dto/pagination.dto';
+import { toBigIntString } from '../common/utils';
 
 const DEX_ROUTER = () => process.env.DEX_ROUTER_ADDRESS || '';
 
@@ -107,12 +108,12 @@ export class DexService {
 
   async buyBondTokens(dto: BuyBondDto, buyerAddress: string): Promise<OrderResponse> {
     const order = await this.getOrder(dto.orderId);
-    const proceeds = order.pricePerToken * dto.amount;
+    const proceeds = BigInt(order.pricePerToken) * BigInt(dto.amount);
 
     const escrowed = await this.getQuoteBalance(buyerAddress, order.quoteAsset);
-    if (escrowed.balance < proceeds) {
+    if (BigInt(escrowed.balance) < proceeds) {
       throw new BadRequestException(
-        `Insufficient escrowed ${order.quoteAsset}: required ${proceeds}, escrowed ${escrowed}. ` +
+        `Insufficient escrowed ${order.quoteAsset}: required ${proceeds}, escrowed ${escrowed.balance}. ` +
         'Call POST /marketplace/escrow/deposit before purchasing.',
       );
     }
@@ -185,7 +186,7 @@ export class DexService {
         nativeToScVal(asset, { type: 'symbol' }),
       ],
     });
-    const balance = Number(scValToNative(balanceScVal));
+    const balance = toBigIntString(scValToNative(balanceScVal));
     return { address, asset, balance };
   }
 
@@ -234,8 +235,8 @@ export class DexService {
       id: Number(data[0]),
       seller: data[1] as string,
       bondId: Number(data[2]),
-      amount: Number(data[3]),
-      pricePerToken: Number(data[4]),
+      amount: toBigIntString(data[3]),
+      pricePerToken: toBigIntString(data[4]),
       quoteAsset: data[5] as QuoteAsset,
       status: this.orderStatusFromIndex(Number(data[6])),
       createdAt: new Date(Number(data[7]) * 1000).toISOString(),

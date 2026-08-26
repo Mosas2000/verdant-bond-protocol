@@ -24,6 +24,7 @@ import {
   BondMaturityStatusEnum,
   CreditTypeEnum,
 } from './interfaces/bond.interface';
+import { toBigIntString } from '../common/utils';
 
 const BOND_ISSUER = () => process.env.BOND_ISSUER_ADDRESS || '';
 const COUPON_ENGINE = () => process.env.COUPON_ENGINE_ADDRESS || '';
@@ -138,8 +139,8 @@ export class BondsService {
           contractAddress: BOND_ISSUER(), method: 'get_holder_balance',
           args: [nativeToScVal(BigInt(id), { type: 'u64' }), Address.fromString(address).toScVal()],
         });
-        const balance = Number(scValToNative(balanceScVal));
-        if (balance > 0) {
+        const balance = toBigIntString(scValToNative(balanceScVal));
+        if (balance !== '0') {
           heldBonds.push({ ...(await this.findOne(id)), balance });
         }
       } catch {}
@@ -164,7 +165,7 @@ export class BondsService {
     await this.redis.del(`bond:${id}`);
     await this.redis.sAdd(`bond:${id}:holders`, dto.investorAddress);
 
-    return { bondId: id, investorAddress: dto.investorAddress, amount: dto.amount, transactionHash: transactionHash || '' };
+    return { bondId: id, investorAddress: dto.investorAddress, amount: toBigIntString(dto.amount), transactionHash: transactionHash || '' };
   }
 
   async getHolders(id: number): Promise<HolderListResponse> {
@@ -177,8 +178,8 @@ export class BondsService {
           contractAddress: BOND_ISSUER(), method: 'get_holder_balance',
           args: [nativeToScVal(BigInt(id), { type: 'u64' }), Address.fromString(address).toScVal()],
         });
-        const balance = Number(scValToNative(balanceScVal));
-        if (balance > 0) holders.push({ address, balance });
+        const balance = toBigIntString(scValToNative(balanceScVal));
+        if (balance !== '0') holders.push({ address, balance });
       } catch {}
     }
 
@@ -208,7 +209,7 @@ export class BondsService {
     return {
       bondId: id,
       periodIndex: dto.periodIndex,
-      totalCredits: Number(parsed?.[2] ?? 0),
+      totalCredits: toBigIntString(parsed?.[2] ?? 0),
       holderCount: Number(parsed?.[3] ?? 0),
     };
   }
@@ -229,7 +230,7 @@ export class BondsService {
     return {
       bondId: id,
       investorAddress: dto.investorAddress,
-      credits: Number(scValToNative(result)),
+      credits: toBigIntString(scValToNative(result)),
       transactionHash: transactionHash || '',
     };
   }
@@ -255,7 +256,7 @@ export class BondsService {
       bondId: id,
       fromAddress: dto.fromAddress,
       toAddress: dto.toAddress,
-      amount: dto.amount,
+      amount: toBigIntString(dto.amount),
       transactionHash: transactionHash || '',
     };
   }
@@ -268,7 +269,7 @@ export class BondsService {
 
     return {
       bondId: id,
-      undistributedTotal: Number(scValToNative(resultScVal)),
+      undistributedTotal: toBigIntString(scValToNative(resultScVal)),
     };
   }
 
@@ -288,7 +289,7 @@ export class BondsService {
 
     return {
       bondId: id,
-      swept: Number(scValToNative(result)),
+      swept: toBigIntString(scValToNative(result)),
       transactionHash: transactionHash || '',
     };
   }
@@ -347,13 +348,13 @@ export class BondsService {
     return {
       id,
       projectId: Buffer.from(config[0] as Uint8Array).toString('hex'),
-      faceValue: Number(config[1]),
-      couponSchedule: (config[2] as any[]).map((v: bigint) => Number(v)),
+      faceValue: toBigIntString(config[1]),
+      couponSchedule: (config[2] as any[]).map((v: bigint) => toBigIntString(v)),
       creditType: config[3] as CreditTypeEnum,
       maturityDate,
       maturityStatus,
-      totalSupply: Number(config[5]),
-      totalSubscribed: Number(state[0]),
+      totalSupply: toBigIntString(config[5]),
+      totalSubscribed: toBigIntString(state[0]),
       status,
       createdAt: new Date(Number(state[2]) * 1000).toISOString(),
     };

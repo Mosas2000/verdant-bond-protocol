@@ -153,8 +153,8 @@ describe('DexService', () => {
         id: 7,
         seller: SELLER,
         bondId: 3,
-        amount: 1000,
-        pricePerToken: 25,
+        amount: '1000',
+        pricePerToken: '25',
         quoteAsset: 'USDC',
         status: OrderStatus.Open,
         createdAt: new Date(1700000000 * 1000).toISOString(),
@@ -193,7 +193,7 @@ describe('DexService', () => {
       await expect(service.getQuoteBalance(address, 'USDC')).resolves.toEqual({
         address,
         asset: 'USDC',
-        balance: 25000,
+        balance: '25000',
       });
 
       expect(simulateCallMock).toHaveBeenCalledWith(
@@ -480,7 +480,16 @@ describe('DexService — cache staleness (in-memory Redis)', () => {
     await inMemRedis.setEx(
       `order:${orderId}`,
       60,
-      JSON.stringify({ id: orderId, status: OrderStatus.Open }),
+      JSON.stringify({ 
+        id: orderId, 
+        seller: SELLER,
+        bondId: 1,
+        amount: '100',
+        pricePerToken: '10',
+        quoteAsset: 'USDC',
+        status: OrderStatus.Open,
+        createdAt: '2023-01-01T00:00:00.000Z',
+      }),
     );
 
     simulateCall.mockImplementation(({ method, args }: { method: string; args: any[] }) => {
