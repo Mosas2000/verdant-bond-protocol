@@ -6,6 +6,7 @@ import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
 import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
+import { ConfigService } from '../config/config.service';
 import { OrderStatus } from './interfaces/marketplace.interface';
 
 // ---------------------------------------------------------------------------
@@ -94,6 +95,10 @@ describe('DexService', () => {
         {
           provide: SigningKeyProvider,
           useValue: { adminSecret: jest.fn().mockReturnValue('SADMIN') },
+        },
+        {
+          provide: ConfigService,
+          useValue: { getDexRouterAddress: jest.fn().mockReturnValue('GDEXROUTERADDRESS') },
         },
       ],
     }).compile();
@@ -404,6 +409,10 @@ describe('DexService — cache staleness (in-memory Redis)', () => {
         {
           provide: SigningKeyProvider,
           useValue: { adminSecret: jest.fn().mockReturnValue('SADMIN') },
+        },
+        {
+          provide: ConfigService,
+          useValue: { getDexRouterAddress: jest.fn().mockReturnValue('GDEXROUTERADDRESS') },
         },
       ],
     }).compile();

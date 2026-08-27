@@ -16,6 +16,7 @@ export class Rfc7807ExceptionFilter implements ExceptionFilter {
     let status = 500;
     let title = 'Internal Server Error';
     let detail = 'An unexpected error occurred';
+    let code: string | undefined = undefined;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -25,16 +26,18 @@ export class Rfc7807ExceptionFilter implements ExceptionFilter {
         const resp = exResponse as Record<string, any>;
         title = resp.message || exception.message;
         detail = resp.detail || (typeof resp.message === 'string' ? resp.message : JSON.stringify(resp.message));
+        code = resp.code;
       } else {
         detail = String(exResponse);
       }
     }
 
     response.status(status).json({
-      type: `https://errors.verdant-bond-protocol.org/${status}`,
+      type: `https://errors.verdant-bond-protocol.org/${code || status}`,
       title,
       status,
       detail,
+      code,
       instance: request.url,
       timestamp: new Date().toISOString(),
     });
