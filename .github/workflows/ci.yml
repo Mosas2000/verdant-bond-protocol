@@ -39,6 +39,8 @@ jobs:
       - name: Build
         run: cargo build --release
         working-directory: contracts
+      - name: Verify reproducible WASM checksums (skips if soroban CLI unavailable)
+        run: ./scripts/reproducibility/wasm-checksums.sh --verify
       - name: Test
         run: cargo test
         working-directory: contracts
@@ -120,6 +122,18 @@ jobs:
       - name: Test
         run: npm test
         working-directory: oracle
+
+  reproducibility:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Verify reproducible lockfiles and artifacts
+        run: ./scripts/reproducibility/verify.sh
 
   deploy-testnet:
     if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
