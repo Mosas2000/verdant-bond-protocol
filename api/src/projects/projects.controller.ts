@@ -1,11 +1,12 @@
 import {
-  Controller, Get, Post, Body, Param, Query,
+  Controller, Get, Post, Body, Param, Query, Req, UseGuards,
   HttpCode, HttpStatus, ParseIntPipe,
 } from '@nestjs/common';
 import { ProjectsService } from './projects.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { ProjectResponse } from './interfaces/project.interface';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 
 @Controller('projects')
 export class ProjectsController {
@@ -52,5 +53,15 @@ export class ProjectsController {
     @Body() body: { files: any[] },
   ): Promise<any> {
     return this.projectsService.uploadDocuments(id, body.files || []);
+  }
+
+  @Get(':id/export')
+  @UseGuards(JwtAuthGuard)
+  async exportProject(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: any,
+  ): Promise<any> {
+    const auditorAddress = req.user?.walletAddress || '';
+    return this.projectsService.exportProject(id, auditorAddress);
   }
 }
