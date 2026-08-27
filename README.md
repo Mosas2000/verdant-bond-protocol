@@ -44,6 +44,7 @@
 - [API Reference](#-api-reference)
 - [Testing](#-testing)
 - [Deployment](#-deployment)
+- [Reproducible Builds](#reproducible-builds)
 - [Governance](#-governance)
 - [Compliance & KYC](#-compliance--kyc)
 - [Roadmap](#-roadmap)
@@ -789,6 +790,42 @@ cd frontend && ng serve
 open http://localhost:4200
 ```
 
+### Local Development Fixtures (Seeding)
+
+The API serves list/detail pages (dashboard, projects, bonds, marketplace,
+oracle) from a Redis cache that is normally populated by on-chain contract
+calls. To develop without deployed contracts, you can seed the local cache with
+a **deterministic, realistic fixture set** so every page renders meaningful data.
+
+```bash
+# Within the api package:
+cd api
+
+# 1. Ensure Redis is running (see docker-compose.yml).
+# 2. Apply the fixtures (idempotent — skips if already seeded):
+npm run seed
+
+# Re-apply fixtures after changing them (overwrites seed keys):
+npm run seed -- --force
+
+# Clear all seeded keys and the seed marker:
+npm run seed -- --reset
+```
+
+What gets seeded (all values are stable and repeatable across runs):
+
+| Domain          | Fixtures                                                                   |
+| --------------- | -------------------------------------------------------------------------- |
+| Users/roles     | 4 users covering admin, developer, investor, oracle-provider               |
+| Projects        | 6 projects spanning every status and 4 credit methodologies                |
+| Bonds           | 8 bonds across Active/Matured and all credit types                          |
+| Marketplace     | 6 orders covering every order status                                        |
+| Oracle reports  | 10 reports (9 plus a pending/stale case) across all report statuses         |
+
+The seed is idempotent (guarded by a `seed:verdant:marker` Redis key) and never
+duplicates or clobbers unrelated keys. See `api/src/seed/fixtures.ts` for the
+data and `api/scripts/seed.ts` for the CLI entry point.
+
 ---
 
 ## 🔧 Environment Variables
@@ -1084,6 +1121,42 @@ docker-compose up -d
 # View logs
 docker-compose logs -f api
 ```
+
+### Reproducible Builds
+
+Releases must be reproducible: the same commit must yield the same Lockfiles,
+WASM contract artifacts, and Node bundles on any machine or CI runner. A
+committed, in-sync lockfile is the primary guarantee; drifting lockfiles or
+uncommitted dependency resolutions are the leading cause of unreproducible
+builds.
+
+Run the self-contained reproducibility gate:
+
+```bash
+# Validates lockfile presence + sync for api/frontend/oracle, Cargo.lock for
+# contracts, and (when the soroban CLI is available) contract WASM checksums:
+./scripts/reproducibility/verify.sh
+```
+
+What each check enforces, and how to regenerate baselines:
+
+| Check                                                     | Script                                                        | Baseline to commit              |
+| --------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------- |
+| Node lockfiles present & in sync (`npm ci --dry-run`)     | `scripts/reproducibility/lockfiles.sh`                        | `api|frontend|oracle/package-lock.json` |
+| Rust workspace pinned                                     | `scripts/reproducibility/lockfiles.sh`                        | `contracts/Cargo.lock`          |
+| Contract WASM artifact checksums                          | `scripts/reproducibility/wasm-checksums.sh --verify`          | `contracts/checksums.sha256`    |
+
+Regenerating the contract WASM checksum baseline (only when artifacts
+intentionally change):
+
+```bash
+./scripts/reproducibility/wasm-checksums.sh --generate
+```
+
+The CI pipeline runs `verify.sh` on every push/PR, so a commit that breaks
+reproducibility (e.g. an out-of-sync lockfile) is blocked before merge, and
+the `contracts` job re-verifies WASM checksums whenever the soroban CLI is
+available in the build environment.
 
 ---
 

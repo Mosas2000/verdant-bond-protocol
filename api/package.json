@@ -9,7 +9,10 @@
     "test": "jest",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:cov": "jest --coverage",
-    "lint": "eslint \"{src,test}/**/*.ts\""
+    "lint": "eslint \"{src,test}/**/*.ts\"",
+    "typecheck": "tsc --noEmit",
+    "seed": "ts-node scripts/seed.ts",
+    "seed:reset": "ts-node scripts/seed.ts --reset"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.0",
