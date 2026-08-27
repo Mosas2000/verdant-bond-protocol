@@ -84,7 +84,7 @@ describe('OracleService', () => {
         projectId: 'a1b2'.padEnd(64, '0'),
         periodStart: 1700000000,
         periodEnd: 1700086400,
-        carbonSequestered: 1200,
+        carbonSequestered: '1200',
         methodology: 'VM0003',
         ipfsHash: 'c3d4'.padEnd(64, '0'),
         status: ReportStatus.Verified,
@@ -143,8 +143,8 @@ describe('OracleService', () => {
 
       expect((service as any).decodeSlashRecord(raw)).toEqual({
         reportId: 7,
-        penalty: 10_000,
-        remainingStake: 90_000,
+        penalty: '10000',
+        remainingStake: '90000',
         timestamp: new Date(1700000000 * 1000).toISOString(),
         activeAfter: true,
       });
@@ -161,8 +161,8 @@ describe('OracleService', () => {
 
       expect((service as any).decodeSlashRecord(raw)).toEqual({
         reportId: 7,
-        penalty: 10_000,
-        remainingStake: 90_000,
+        penalty: '10000',
+        remainingStake: '90000',
         timestamp: new Date(1700000000 * 1000).toISOString(),
         activeAfter: true,
       });

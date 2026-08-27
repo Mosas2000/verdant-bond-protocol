@@ -22,7 +22,16 @@ import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
 import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
+import { ConfigService } from '../config/config.service';
 import { BondStatusEnum, BondMaturityStatusEnum, CreditTypeEnum } from './interfaces/bond.interface';
+
+const configProvider = {
+  provide: ConfigService,
+  useValue: {
+    getBondIssuerAddress: jest.fn().mockReturnValue(''),
+    getCouponEngineAddress: jest.fn().mockReturnValue(''),
+  },
+};
 
 const redisProvider = {
   provide: RedisService,
@@ -58,6 +67,7 @@ describe('BondsService', () => {
         },
         redisProvider,
         signingProvider,
+        configProvider,
       ],
     }).compile();
 
@@ -119,6 +129,7 @@ describe('BondsService', () => {
           },
           redisProvider,
           signingProvider,
+          configProvider,
         ],
       }).compile();
 
@@ -157,6 +168,7 @@ describe('BondsService', () => {
           },
           redisProvider,
           signingProvider,
+          configProvider,
         ],
       }).compile();
 
@@ -188,6 +200,7 @@ describe('BondsService', () => {
           { provide: NonceService, useValue: { next: jest.fn() } },
           redisProvider,
           signingProvider,
+          configProvider,
         ],
       }).compile();
       const svc = moduleRef.get(BondsService);
@@ -242,6 +255,7 @@ describe('BondsService', () => {
           },
           redisProvider,
           signingProvider,
+          configProvider,
         ],
       }).compile();
 
@@ -284,6 +298,7 @@ describe('BondsService', () => {
           },
           redisProvider,
           signingProvider,
+          configProvider,
         ],
       }).compile();
       return moduleRef.get(BondsService);
@@ -364,6 +379,7 @@ describe('BondsService', () => {
           },
           redisProvider,
           signingProvider,
+          configProvider,
         ],
       }).compile();
       return moduleRef.get(BondsService);

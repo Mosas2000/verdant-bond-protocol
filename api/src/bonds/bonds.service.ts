@@ -25,6 +25,7 @@ import {
 } from './interfaces/bond.interface';
 import { toBigIntString } from '../common/utils';
 import { ConfigService } from '../config/config.service';
+import { Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 
 const BOND_ERROR_CODE = {
   NotInitialized: 1,

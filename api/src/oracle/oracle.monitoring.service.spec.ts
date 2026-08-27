@@ -2,6 +2,7 @@ import { Test } from '@nestjs/testing';
 import { OracleMonitoringService } from './oracle.monitoring.service';
 import { ProjectsService } from '../projects/projects.service';
 import { OracleService } from './oracle.service';
+import { RedisService } from '../common/services/redis.service';
 import { ReportStatus } from './interfaces/oracle.interface';
 
 const NOW = Date.UTC(2026, 0, 1, 0, 0, 0);
@@ -49,6 +50,13 @@ describe('OracleMonitoringService', () => {
         OracleMonitoringService,
         { provide: ProjectsService, useValue: projectsService },
         { provide: OracleService, useValue: oracleService },
+        {
+          provide: RedisService,
+          useValue: {
+            get: jest.fn().mockResolvedValue(null),
+            set: jest.fn().mockResolvedValue(undefined),
+          },
+        },
       ],
     }).compile();
 
