@@ -11,6 +11,7 @@ import { TransferBondDto } from './dto/transfer-bond.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { AdminGuard } from '../common/guards/admin.guard';
+import { KycGuard } from '../common/guards/kyc.guard';
 import {
   BondResponse,
   SubscriptionResponse,
@@ -28,6 +29,7 @@ export class BondsController {
   constructor(private readonly bondsService: BondsService) {}
 
   @Post()
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() dto: CreateBondDto): Promise<BondResponse> {
     return this.bondsService.create(dto);
@@ -51,6 +53,7 @@ export class BondsController {
   }
 
   @Post(':id/subscribe')
+  @UseGuards(JwtAuthGuard, KycGuard)
   @HttpCode(HttpStatus.OK)
   async subscribe(
     @Param('id', ParseIntPipe) id: number,
@@ -67,6 +70,7 @@ export class BondsController {
   }
 
   @Post(':id/coupon')
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @HttpCode(HttpStatus.OK)
   async distributeCoupon(
     @Param('id', ParseIntPipe) id: number,
@@ -76,6 +80,7 @@ export class BondsController {
   }
 
   @Post(':id/claim')
+  @UseGuards(JwtAuthGuard, KycGuard)
   @HttpCode(HttpStatus.OK)
   async claimCredits(
     @Param('id', ParseIntPipe) id: number,
@@ -101,6 +106,7 @@ export class BondsController {
   }
 
   @Post(':id/transfer')
+  @UseGuards(JwtAuthGuard, KycGuard)
   @HttpCode(HttpStatus.OK)
   async transfer(
     @Param('id', ParseIntPipe) id: number,
@@ -110,6 +116,7 @@ export class BondsController {
   }
 
   @Post(':id/mature')
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @HttpCode(HttpStatus.OK)
   async mature(
     @Param('id', ParseIntPipe) id: number,

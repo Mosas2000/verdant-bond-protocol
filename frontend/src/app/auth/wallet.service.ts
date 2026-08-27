@@ -1,5 +1,6 @@
 import { Injectable, signal } from '@angular/core';
 import { isConnected, getAddress, signTransaction } from '@stellar/freighter-api';
+import { environment } from '../../environments/environment';
 
 @Injectable({ providedIn: 'root' })
 export class WalletService {
@@ -24,7 +25,7 @@ export class WalletService {
 
   async signChallenge(challenge: string): Promise<string> {
     const { signedTxXdr } = await signTransaction(challenge, {
-      networkPassphrase: 'Test SDF Network ; September 2015',
+      networkPassphrase: environment.networkPassphrase,
     });
     return signedTxXdr;
   }
