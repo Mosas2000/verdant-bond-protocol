@@ -17,6 +17,7 @@ jest.mock('@redis/client', () => {
 });
 
 import { BondsService } from './bonds.service';
+import { ContractException } from '../stellar/contract-errors';
 import { ContractService } from '../stellar/contract.service';
 import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
@@ -314,6 +315,27 @@ describe('BondsService', () => {
       const svc = await buildModule(contractService);
 
       await expect(svc.mature(7)).rejects.toThrow(mockError);
+    });
+
+    it('maps BondAlreadyMatured contract error to friendly BadRequestException', async () => {
+      const contractService = {
+        invokeContractMethod: jest.fn().mockRejectedValue(
+          new ContractException('BOND_ALREADY_MATURED', 'already matured', undefined, undefined, 5),
+        ),
+      };
+
+      const svc = await buildModule(contractService);
+
+      await expect(svc.mature(11)).rejects.toMatchObject({
+        response: expect.anything(),
+      });
+      try {
+        await svc.mature(11);
+      } catch (err: any) {
+        const resp = err.getResponse ? err.getResponse() : err.response;
+        const msg = typeof resp === 'string' ? resp : resp?.message;
+        expect(msg).toContain('Bond 11 is already matured');
+      }
     });
   });
 

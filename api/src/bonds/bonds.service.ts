@@ -1,5 +1,6 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { ContractService } from '../stellar/contract.service';
+import { ContractException } from '../stellar/contract-errors';
 import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
 import { RedisService } from '../common/services/redis.service';
@@ -361,9 +362,21 @@ export class BondsService {
   }
 
   private mapBondError(error: unknown, bondId: number): any {
+    if (error instanceof ContractException) {
+      const code = error.rawErrorCode as number | undefined;
+      if (code === BOND_ERROR_CODE.BondAlreadyMatured) {
+        return new BadRequestException(`Bond ${bondId} is already matured`);
+      }
+      if (code === BOND_ERROR_CODE.BondNotFound) {
+        return new BadRequestException(`Bond ${bondId} not found`);
+      }
+      return new BadRequestException(error.detail || String(error.message));
+    }
+
     if (error instanceof Error) {
       return error;
     }
+
     return new BadRequestException('Failed to mature bond');
   }
 

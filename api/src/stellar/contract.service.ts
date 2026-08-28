@@ -282,7 +282,13 @@ export class ContractService {
   private decodeContractError(
     contractAddress: string,
     method: string,
+    error?: string,
+    events?: xdr.DiagnosticEvent[],
   ): string {
+    const code = this.extractContractErrorCode(error, events);
+    if (code !== undefined) {
+      return `Contract error on ${contractAddress}.${method} (contract error code ${code})`;
+    }
     return `Contract error on ${contractAddress}.${method}`;
   }
 
