@@ -1075,6 +1075,18 @@ npm run test:e2e
 npm run test:cov
 ```
 
+### End-to-End Lifecycle Testing
+
+The repository includes a complete end-to-end lifecycle test harness that runs the full happy-path of the protocol (project registration, approval, bond issuance, subscription, oracle reporting, coupon distribution, DEX trading, and redemption) on Stellar Testnet.
+
+To run the full E2E test with a single command:
+
+```bash
+./scripts/run-lifecycle-test.sh
+```
+
+This script automatically generates temporary wallets, funds them via Friendbot, builds and deploys the Soroban contracts, and executes the Jest test suite.
+
 ### Frontend
 
 ```bash

@@ -34,6 +34,72 @@ Key invariants:
 }
 ```
 
+## Evidence Hash Requirements
+
+`ipfs_evidence_hash` (and the API's `SubmitReportDto.evidenceHash`) is a
+reference to supporting evidence for a report -- satellite imagery, IoT
+readings, field survey documents, or the report's own metadata. Because it
+is stored on-chain as `BytesN<32>`, it must always resolve to exactly 32
+bytes; two formats are supported:
+
+- **CIDv0** -- an IPFS content identifier of the form `Qm` followed by 44
+  base58btc characters, decoding to a 34-byte sha2-256 multihash
+  (`0x12 0x20 <32-byte digest>`). The 2-byte multihash prefix is stripped
+  before the digest is stored on-chain. This is the only format
+  `hashEvidence()` (`ipfs/evidence.ts`) ever produces, and the only format
+  every provider adapter (`oracle/verra-adapter.ts`,
+  `oracle/satellite-processor.ts`, `oracle/iot-aggregator.ts`,
+  `oracle/blue-carbon-adapter.ts`, via `oracle/report.ts`'s
+  `buildOracleReport`) emits.
+- **A raw 64-character hex string** -- a SHA-256 digest already encoded as
+  hex, matching `sha256Hex()` (`ipfs/evidence.ts`) and the hex-encoded
+  `ipfsHash`/`counterEvidenceHash` fields already used elsewhere in report
+  and challenge responses.
+
+**CIDv1 is not supported.** Nothing in this codebase's adapters, the IPFS
+pinning path, or `oracle/validator.ts`'s on-chain pre-flight checks ever
+produces one; a CIDv1-shaped reference is rejected the same as any other
+unsupported format, not partially parsed.
+
+### Validation
+
+A malformed `evidenceHash` -- wrong length, invalid encoding, an unsupported
+CID version -- is rejected by the API **before** the report's metadata is
+uploaded to IPFS or `submit_report` is called on-chain. This happens at the
+request-validation layer (`SubmitReportDto`'s `@IsEvidenceReference`
+decorator), so a malformed reference never reaches `OracleService`. The
+same two formats are validated independently on the provider-adapter side
+via `isValidEvidenceHash()` (`ipfs/evidence.ts`), and on the API side via
+`isValidCid()`/`encodeCid()` (`api/src/common/utils/cid.util.ts`) --
+deliberately duplicated rather than shared, since the `api` and `oracle`
+packages are built and deployed independently and do not share source at
+runtime.
+
+When `evidenceHash` is supplied on `POST /oracle/reports`, it -- not the
+hash of the report metadata the API itself uploads to IPFS -- becomes the
+on-chain `ipfs_evidence_hash`. The metadata upload still always happens (an
+independent audit record of the submitted report body), but omitting
+`evidenceHash` is what falls back to anchoring that metadata hash instead,
+exactly as before this field carried its own validated meaning.
+
+### Retrievability (optional)
+
+Format validation is synchronous and never touches the network, so tests
+for it run deterministically without depending on a public IPFS gateway.
+Separately, and only when explicitly enabled, the API can also check that a
+CIDv0 evidence reference actually resolves from the configured gateway
+before anchoring it on-chain:
+
+- `ORACLE_EVIDENCE_VERIFY_RETRIEVABILITY=true` enables the check (off by
+  default).
+- `ORACLE_EVIDENCE_RETRIEVABILITY_TIMEOUT_MS` bounds how long the check may
+  take (default `5000`ms) -- a slow or unreachable gateway can never hang
+  report submission.
+- The check only applies to a CIDv0 reference; a raw hex digest names no
+  gateway to fetch from, so it is skipped.
+- An unretrievable evidence reference fails submission with a `422
+  Unprocessable Entity` naming the evidence hash and the gateway response.
+
 ## Multi-Source Verification Threshold
 A report only reaches `Verified` status after **independent verifications** meet the configured threshold:
 

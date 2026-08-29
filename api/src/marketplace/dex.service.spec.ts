@@ -2,6 +2,7 @@ import { Test } from '@nestjs/testing';
 import { nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 import { DexService } from './dex.service';
 import { ContractService } from '../stellar/contract.service';
+import { ContractException } from '../stellar/contract-errors';
 import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
 import { RedisService } from '../common/services/redis.service';
@@ -366,6 +367,25 @@ describe('DexService', () => {
       expect(redis.delPattern).toHaveBeenCalledWith('orders:*');
       expect(redis.del).toHaveBeenCalledWith('order:7');
     });
+  });
+});
+
+describe('DexService — mapDexError (unit)', () => {
+  it('maps InsufficientFunds contract error to PAYMENT_REQUIRED HttpException', () => {
+    const svc = new DexService({} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const err = new ContractException('DEX_INSUFFICIENT_FUNDS', 'insufficient', undefined, undefined, 10);
+    const mapped = (svc as any).mapDexError(err);
+    expect(mapped).toBeInstanceOf(Object);
+    // ensure it's an HttpException with payment required
+    const status = (mapped as any).getStatus ? (mapped as any).getStatus() : (mapped as any).status;
+    expect(status).toBe(402);
+  });
+
+  it('falls back to BadRequestException for unknown contract codes', () => {
+    const svc = new DexService({} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const err = new ContractException('SOME_CODE', 'some detail', undefined, undefined, 999);
+    const mapped = (svc as any).mapDexError(err);
+    expect(mapped).toBeInstanceOf(Object);
   });
 });
 

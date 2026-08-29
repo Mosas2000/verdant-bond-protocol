@@ -1,12 +1,12 @@
 import { Test } from '@nestjs/testing';
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, UnprocessableEntityException } from '@nestjs/common';
 
 jest.mock('@stellar/stellar-sdk', () => {
   const actual = jest.requireActual('@stellar/stellar-sdk');
   return { ...actual, scValToNative: jest.fn() };
 });
 
-import { xdr, scValToNative, Keypair } from '@stellar/stellar-sdk';
+import { xdr, scValToNative, nativeToScVal, Keypair } from '@stellar/stellar-sdk';
 import { OracleService } from './oracle.service';
 import { ContractService } from '../stellar/contract.service';
 import { IpfsService } from '../projects/ipfs.service';
@@ -16,25 +16,37 @@ import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { ConfigService } from '../config/config.service';
 import { ReportStatus } from './interfaces/oracle.interface';
+import { InvalidEvidenceReferenceError } from '../common/utils';
 
 describe('OracleService', () => {
   let service: OracleService;
   let contractService: { simulateCall: jest.Mock; invokeContractMethod: jest.Mock };
+  let ipfsService: { uploadJson: jest.Mock };
   let redis: { del: jest.Mock };
   const adminKeypair = Keypair.random();
 
   beforeEach(async () => {
+    (scValToNative as jest.Mock).mockReset();
     contractService = {
       simulateCall: jest.fn(),
-      invokeContractMethod: jest.fn().mockResolvedValue({ result: 0 }),
+      invokeContractMethod: jest.fn().mockResolvedValue({ result: nativeToScVal(BigInt(1), { type: 'u64' }) }),
+    };
+    ipfsService = {
+      uploadJson: jest.fn().mockResolvedValue({
+        hash: 'QmYwAPJzv5CZsnAzt8auVZRnTb7F8Pz6ePzE9LbYp8Xy7F',
+        gatewayUrl: '',
+        pinSize: 1,
+        timestamp: '',
+      }),
     };
     redis = { del: jest.fn().mockResolvedValue(undefined) };
+    delete process.env.ORACLE_EVIDENCE_VERIFY_RETRIEVABILITY;
 
     const moduleRef = await Test.createTestingModule({
       providers: [
         OracleService,
         { provide: ContractService, useValue: contractService },
-        { provide: IpfsService, useValue: {} },
+        { provide: IpfsService, useValue: ipfsService },
         {
           provide: StellarService,
           useValue: {
@@ -89,6 +101,7 @@ describe('OracleService', () => {
         ipfsHash: 'c3d4'.padEnd(64, '0'),
         status: ReportStatus.Verified,
         createdAt: new Date(1700001000 * 1000).toISOString(),
+        verifiedAt: undefined,
       });
     });
 
@@ -208,6 +221,119 @@ describe('OracleService', () => {
     it('prefers object keys over array indices', () => {
       expect((service as any).field({ slashes: 4 }, 'slashes', 2)).toBe(4);
       expect((service as any).field([1, 2, 4], 'slashes', 2)).toBe(4);
+    });
+  });
+
+  describe('evidenceHashToScVal (#93)', () => {
+    it('encodes a valid CIDv0 to a 32-byte ScVal', () => {
+      const scVal = (service as any).evidenceHashToScVal(
+        'QmYwAPJzv5CZsnAzt8auVZRnTb7F8Pz6ePzE9LbYp8Xy7F',
+      ) as xdr.ScVal;
+      expect(scVal.bytes().length).toBe(32);
+    });
+
+    it('encodes a valid 64-char hex digest to a 32-byte ScVal', () => {
+      const scVal = (service as any).evidenceHashToScVal('ab'.repeat(32)) as xdr.ScVal;
+      expect(scVal.bytes().length).toBe(32);
+    });
+
+    it('throws for a malformed evidence reference instead of silently hashing it', () => {
+      expect(() => (service as any).evidenceHashToScVal('not-a-real-cid')).toThrow(
+        InvalidEvidenceReferenceError,
+      );
+    });
+  });
+
+  describe('submitReport evidence handling (#93)', () => {
+    const dto = {
+      projectId: 'VCS-1234',
+      periodStart: 1700000000,
+      periodEnd: 1700086400,
+      carbonSequestered: 1200,
+      methodology: 'VM0003',
+    };
+    const PROVIDER = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
+
+    it('anchors the caller-supplied evidenceHash on-chain when provided, not the metadata pin hash', async () => {
+      const suppliedEvidence = 'QmaozNR7DZHQK1ZcU9p7QdrshMvXqWK6gpu5rmrkPdT3L4';
+      await service.submitReport({ ...dto, evidenceHash: suppliedEvidence } as any, PROVIDER);
+
+      const args = contractService.invokeContractMethod.mock.calls[0][3];
+      const evidenceArg = args[6] as xdr.ScVal;
+      expect(evidenceArg.bytes().toString('hex')).toBe(
+        (service as any).evidenceHashToScVal(suppliedEvidence).bytes().toString('hex'),
+      );
+    });
+
+    it('falls back to the IPFS metadata pin hash when no evidenceHash is supplied', async () => {
+      await service.submitReport({ ...dto } as any, PROVIDER);
+
+      const args = contractService.invokeContractMethod.mock.calls[0][3];
+      const evidenceArg = args[6] as xdr.ScVal;
+      expect(evidenceArg.bytes().toString('hex')).toBe(
+        (service as any)
+          .evidenceHashToScVal('QmYwAPJzv5CZsnAzt8auVZRnTb7F8Pz6ePzE9LbYp8Xy7F')
+          .bytes()
+          .toString('hex'),
+      );
+    });
+
+    it('still uploads the report metadata to IPFS even when evidenceHash is supplied', async () => {
+      await service.submitReport(
+        { ...dto, evidenceHash: 'QmaozNR7DZHQK1ZcU9p7QdrshMvXqWK6gpu5rmrkPdT3L4' } as any,
+        PROVIDER,
+      );
+      expect(ipfsService.uploadJson).toHaveBeenCalledTimes(1);
+    });
+
+    describe('retrievability check (off by default)', () => {
+      const originalFetch = global.fetch;
+
+      afterEach(() => {
+        global.fetch = originalFetch;
+      });
+
+      it('does not call fetch when the retrievability flag is unset', async () => {
+        global.fetch = jest.fn();
+        await service.submitReport(
+          { ...dto, evidenceHash: 'QmaozNR7DZHQK1ZcU9p7QdrshMvXqWK6gpu5rmrkPdT3L4' } as any,
+          PROVIDER,
+        );
+        expect(global.fetch).not.toHaveBeenCalled();
+      });
+
+      it('checks retrievability against the gateway when the flag is enabled', async () => {
+        process.env.ORACLE_EVIDENCE_VERIFY_RETRIEVABILITY = 'true';
+        global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+
+        const cid = 'QmaozNR7DZHQK1ZcU9p7QdrshMvXqWK6gpu5rmrkPdT3L4';
+        await service.submitReport({ ...dto, evidenceHash: cid } as any, PROVIDER);
+
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+        expect((global.fetch as jest.Mock).mock.calls[0][0]).toContain(cid);
+      });
+
+      it('rejects submission with a clear error when the gateway reports the evidence unavailable', async () => {
+        process.env.ORACLE_EVIDENCE_VERIFY_RETRIEVABILITY = 'true';
+        global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 404 });
+
+        await expect(
+          service.submitReport(
+            { ...dto, evidenceHash: 'QmaozNR7DZHQK1ZcU9p7QdrshMvXqWK6gpu5rmrkPdT3L4' } as any,
+            PROVIDER,
+          ),
+        ).rejects.toThrow(UnprocessableEntityException);
+        expect(contractService.invokeContractMethod).not.toHaveBeenCalled();
+      });
+
+      it('skips the retrievability check for a hex-digest evidence reference (no gateway to check)', async () => {
+        process.env.ORACLE_EVIDENCE_VERIFY_RETRIEVABILITY = 'true';
+        global.fetch = jest.fn();
+
+        await service.submitReport({ ...dto, evidenceHash: 'ab'.repeat(32) } as any, PROVIDER);
+
+        expect(global.fetch).not.toHaveBeenCalled();
+      });
     });
   });
 
