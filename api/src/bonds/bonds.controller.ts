@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Body, Param, Query, Req, HttpCode, HttpStatus, UseGuards, ParseIntPipe
+  Controller, Get, Post, Body, Param, Query, Req, HttpCode, HttpStatus, UseGuards, ParseIntPipe, Header
 } from '@nestjs/common';
 import { BondsService } from './bonds.service';
 import { CreateBondDto } from './dto/create-bond.dto';
@@ -21,6 +21,7 @@ import {
   TransferResponse,
   UndistributedTotalResponse,
   SweepUndistributedResponse,
+  BondDetailResponse,
 } from './interfaces/bond.interface';
 
 @Controller('bonds')
@@ -47,8 +48,17 @@ export class BondsController {
   }
 
   @Get(':id')
+  @Header('Cache-Control', 'no-cache')
   async findOne(@Param('id', ParseIntPipe) id: number): Promise<BondResponse> {
     return this.bondsService.findOne(id);
+  }
+
+  @Get(':id/detail')
+  @Header('Cache-Control', 'no-cache')
+  async getBondDetail(
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<BondDetailResponse> {
+    return this.bondsService.getBondDetail(id);
   }
 
   @Post(':id/subscribe')
