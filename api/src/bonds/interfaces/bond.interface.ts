@@ -19,41 +19,45 @@ export enum BondMaturityStatusEnum {
 export interface BondResponse {
   id: number;
   projectId: string;
-  faceValue: number;
-  couponSchedule: number[];
+  faceValue: string;
+  couponSchedule: string[];
   creditType: CreditTypeEnum;
   maturityDate: number;
   maturityStatus: BondMaturityStatusEnum;
-  totalSupply: number;
-  totalSubscribed: number;
+  totalSupply: string;
+  totalSubscribed: string;
   status: BondStatusEnum;
   createdAt: string;
+}
+
+export interface HeldBondResponse extends BondResponse {
+  balance: string;
 }
 
 export interface SubscriptionResponse {
   bondId: number;
   investorAddress: string;
-  amount: number;
+  amount: string;
   transactionHash: string;
 }
 
 export interface HolderListResponse {
   bondId: number;
-  holders: Array<{ address: string; balance: number }>;
+  holders: Array<{ address: string; balance: string }>;
   total: number;
 }
 
 export interface CouponDistributionResponse {
   bondId: number;
   periodIndex: number;
-  totalCredits: number;
+  totalCredits: string;
   holderCount: number;
 }
 
 export interface ClaimCreditsResponse {
   bondId: number;
   investorAddress: string;
-  credits: number;
+  credits: string;
   transactionHash: string;
 }
 
@@ -61,17 +65,17 @@ export interface TransferResponse {
   bondId: number;
   fromAddress: string;
   toAddress: string;
-  amount: number;
+  amount: string;
   transactionHash: string;
 }
 
 export interface UndistributedTotalResponse {
   bondId: number;
-  undistributedTotal: number;
+  undistributedTotal: string;
 }
 
 export interface SweepUndistributedResponse {
   bondId: number;
-  swept: number;
+  swept: string;
   transactionHash: string;
 }

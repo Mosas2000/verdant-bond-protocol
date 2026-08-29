@@ -17,9 +17,42 @@ jest.mock('@redis/client', () => {
 });
 
 import { BondsService } from './bonds.service';
+import { ContractException } from '../stellar/contract-errors';
 import { ContractService } from '../stellar/contract.service';
 import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
+import { RedisService } from '../common/services/redis.service';
+import { SigningKeyProvider } from '../common/services/signing-key.provider';
+import { ConfigService } from '../config/config.service';
+import { BondStatusEnum, BondMaturityStatusEnum, CreditTypeEnum } from './interfaces/bond.interface';
+
+const redisProvider = {
+  provide: RedisService,
+  useValue: {
+    get: jest.fn().mockResolvedValue(null),
+    setEx: jest.fn().mockResolvedValue(undefined),
+    del: jest.fn().mockResolvedValue(undefined),
+    sMembers: jest.fn().mockResolvedValue([]),
+    sAdd: jest.fn().mockResolvedValue(undefined),
+  },
+};
+
+const signingProvider = {
+  provide: SigningKeyProvider,
+  useValue: {
+    adminSecret: jest.fn().mockReturnValue('SADMIN'),
+    investorSecret: jest.fn().mockReturnValue('SINVESTOR'),
+  },
+};
+
+const configProvider = {
+  provide: ConfigService,
+  useValue: {
+    getBondIssuerAddress: jest.fn().mockReturnValue('CBONDISSUERADDRESS'),
+    getCouponEngineAddress: jest.fn().mockReturnValue('CCOUPONENGINEADDRESS'),
+    getCreditRetirementAddress: jest.fn().mockReturnValue('CCREDITRETIREMENTADDRESS'),
+  },
+};
 
 describe('BondsService', () => {
   let service: BondsService;
@@ -34,6 +67,9 @@ describe('BondsService', () => {
           provide: NonceService,
           useValue: { next: jest.fn().mockResolvedValue(0) },
         },
+        redisProvider,
+        signingProvider,
+        configProvider,
       ],
     }).compile();
 
@@ -93,6 +129,9 @@ describe('BondsService', () => {
             provide: NonceService,
             useValue: { next: jest.fn().mockResolvedValue(0) },
           },
+          redisProvider,
+          signingProvider,
+          configProvider,
         ],
       }).compile();
 
@@ -102,7 +141,7 @@ describe('BondsService', () => {
       const [contractAddress, method, , args] =
         contractService.invokeContractMethod.mock.calls[0];
 
-      expect(contractAddress).toBe('');
+      expect(contractAddress).toBe('CCOUPONENGINEADDRESS');
       expect(method).toBe('distribute_coupon');
       expect(args.length).toBe(5);
       expect(scValToNative(args[0])).toBe(
@@ -129,6 +168,9 @@ describe('BondsService', () => {
             provide: NonceService,
             useValue: { next: jest.fn().mockResolvedValue(0) },
           },
+          redisProvider,
+          signingProvider,
+          configProvider,
         ],
       }).compile();
 
@@ -137,10 +179,54 @@ describe('BondsService', () => {
 
       const [options] = contractService.simulateCall.mock.calls[0];
 
-      expect(options.contractAddress).toBe('');
+      expect(options.contractAddress).toBe('CCOUPONENGINEADDRESS');
       expect(options.method).toBe('get_undistributed_total');
       expect(options.args).toEqual([nativeToScVal(BigInt(3), { type: 'u64' })]);
-      expect(result).toEqual({ bondId: 3, undistributedTotal: 42 });
+      expect(result).toEqual({ bondId: 3, undistributedTotal: '42' });
+    });
+  });
+
+  describe('findHeldByAddress', () => {
+    it('returns only bonds with a positive on-chain balance', async () => {
+      const contractService = {
+        simulateCall: jest.fn()
+          .mockResolvedValueOnce(nativeToScVal(BigInt(2), { type: 'u64' }))
+          .mockResolvedValueOnce(nativeToScVal(BigInt(25), { type: 'i128' }))
+          .mockResolvedValueOnce(nativeToScVal(BigInt(0), { type: 'i128' })),
+      };
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          BondsService,
+          { provide: ContractService, useValue: contractService },
+          { provide: StellarService, useValue: {} },
+          { provide: NonceService, useValue: { next: jest.fn() } },
+          redisProvider,
+          signingProvider,
+          configProvider,
+        ],
+      }).compile();
+      const svc = moduleRef.get(BondsService);
+      jest.spyOn(svc, 'findOne').mockImplementation(async (id) => ({
+        id,
+        projectId: '',
+        faceValue: '0',
+        couponSchedule: [],
+        creditType: CreditTypeEnum.Carbon,
+        maturityDate: 0,
+        maturityStatus: BondMaturityStatusEnum.Active,
+        totalSupply: '0',
+        totalSubscribed: '0',
+        status: BondStatusEnum.Active,
+        createdAt: '',
+      }));
+
+      const result = await svc.findHeldByAddress(
+        'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe(1);
+      expect(result[0].balance).toBe('25');
     });
   });
 
@@ -169,6 +255,9 @@ describe('BondsService', () => {
             provide: NonceService,
             useValue: { next: jest.fn().mockResolvedValue(0) },
           },
+          redisProvider,
+          signingProvider,
+          configProvider,
         ],
       }).compile();
 
@@ -178,16 +267,16 @@ describe('BondsService', () => {
       const [contractAddress, method, callerSecret, args, nonce] =
         contractService.invokeContractMethod.mock.calls[0];
 
-      expect(contractAddress).toBe('');
+      expect(contractAddress).toBe('CCOUPONENGINEADDRESS');
       expect(method).toBe('sweep_undistributed');
-      expect(callerSecret).toBe('');
+      expect(callerSecret).toBe('SADMIN');
       expect(args.length).toBe(2);
       expect(scValToNative(args[0])).toBe(
         'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
       );
       expect(scValToNative(args[1])).toBe(BigInt(3));
       expect(nonce).toBe(0);
-      expect(result).toEqual({ bondId: 3, swept: 42, transactionHash: '0xabc' });
+      expect(result).toEqual({ bondId: 3, swept: '42', transactionHash: '0xabc' });
     });
   });
 
@@ -209,46 +298,44 @@ describe('BondsService', () => {
             provide: NonceService,
             useValue: { next: jest.fn().mockResolvedValue(0) },
           },
+          redisProvider,
+          signingProvider,
+          configProvider,
         ],
       }).compile();
       return moduleRef.get(BondsService);
     };
 
-    it('maps a before-maturity Overflow to a 400 with a clear message', async () => {
+    it('propagates contract errors unchanged', async () => {
+      const mockError = new BadRequestException('Some contract error');
       const contractService = {
-        invokeContractMethod: jest.fn().mockRejectedValue(
-          new BadRequestException(
-            'Contract error on TEST.mature_bond (contract error code 9)',
-          ),
-        ),
+        invokeContractMethod: jest.fn().mockRejectedValue(mockError),
       };
 
       const svc = await buildModule(contractService);
 
-      await expect(svc.mature(7)).rejects.toMatchObject({
-        status: 400,
-        message: expect.stringContaining(
-          'Bond #7 cannot be matured before its maturity date',
-        ),
-      });
+      await expect(svc.mature(7)).rejects.toThrow(mockError);
     });
 
-    it('rethrows other contract errors unchanged', async () => {
+    it('maps BondAlreadyMatured contract error to friendly BadRequestException', async () => {
       const contractService = {
         invokeContractMethod: jest.fn().mockRejectedValue(
-          new BadRequestException(
-            'Contract error on TEST.mature_bond (contract error code 4)',
-          ),
+          new ContractException('BOND_ALREADY_MATURED', 'already matured', undefined, undefined, 5),
         ),
       };
 
       const svc = await buildModule(contractService);
 
-      await expect(svc.mature(7)).rejects.toMatchObject({
-        status: 400,
-        message:
-          'Contract error on TEST.mature_bond (contract error code 4)',
+      await expect(svc.mature(11)).rejects.toMatchObject({
+        response: expect.anything(),
       });
+      try {
+        await svc.mature(11);
+      } catch (err: any) {
+        const resp = err.getResponse ? err.getResponse() : err.response;
+        const msg = typeof resp === 'string' ? resp : resp?.message;
+        expect(msg).toContain('Bond 11 is already matured');
+      }
     });
   });
 
@@ -287,6 +374,9 @@ describe('BondsService', () => {
             provide: NonceService,
             useValue: { next: jest.fn().mockResolvedValue(0) },
           },
+          redisProvider,
+          signingProvider,
+          configProvider,
         ],
       }).compile();
       return moduleRef.get(BondsService);

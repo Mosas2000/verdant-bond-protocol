@@ -7,6 +7,7 @@ import { OracleMonitoringService } from './oracle.monitoring.service';
 import { SubmitReportDto } from './dto/submit-report.dto';
 import { ChallengeDto } from './dto/challenge.dto';
 import { RegisterProviderDto } from './dto/register-provider.dto';
+import { RateLimit } from '../common/decorators/rate-limit.decorator';
 import {
   ReportResponse,
   ChallengeResponse,
@@ -23,6 +24,7 @@ export class OracleController {
   ) {}
 
   @Post('reports')
+  @RateLimit({ type: 'oracle' })
   @HttpCode(HttpStatus.CREATED)
   async submitReport(
     @Body() dto: SubmitReportDto,
@@ -40,6 +42,7 @@ export class OracleController {
   }
 
   @Post('challenge/:reportId')
+  @RateLimit({ type: 'oracle' })
   @HttpCode(HttpStatus.OK)
   async challengeReport(
     @Param('reportId', ParseIntPipe) reportId: number,
@@ -51,6 +54,7 @@ export class OracleController {
   }
 
   @Post('providers')
+  @RateLimit({ type: 'oracle' })
   @HttpCode(HttpStatus.CREATED)
   async registerProvider(@Body() dto: RegisterProviderDto): Promise<ProviderResponse> {
     return this.oracleService.registerProvider(dto);

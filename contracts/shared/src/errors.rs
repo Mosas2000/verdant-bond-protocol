@@ -14,6 +14,7 @@ pub enum BondError {
     Overflow = 9,
     ReportNotVerified = 10,
     InvalidReport = 11,
+    InvalidSupply = 12,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +58,7 @@ pub enum RegistryError {
     ProjectAlreadyExists = 4,
     InvalidStatusTransition = 5,
     InvalidNonce = 6,
+    InvalidArgument = 7,
 }
 
 #[derive(Clone, Debug, PartialEq)]

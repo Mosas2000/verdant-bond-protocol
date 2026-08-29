@@ -4,11 +4,13 @@ import {
 } from '@nestjs/common';
 import { DexService } from './dex.service';
 import { LiquidityService } from './liquidity.service';
+import { StellarService } from '../stellar/stellar.service';
 import { ListBondDto } from './dto/list-bond.dto';
 import { BuyBondDto } from './dto/buy-bond.dto';
 import { DepositQuoteDto } from './dto/deposit-quote.dto';
 import { WithdrawQuoteDto } from './dto/withdraw-quote.dto';
 import { QuoteBalanceQueryDto } from './dto/quote-balance-query.dto';
+import { RateLimit } from '../common/decorators/rate-limit.decorator';
 import {
   OrderResponse,
   PriceFeedResponse,
@@ -17,31 +19,43 @@ import {
   QuoteTransactionResponse,
   SlippageResponse,
 } from './interfaces/marketplace.interface';
-import { PaginatedResponse } from '../common/dto/pagination.dto';
+import { PaginatedResponse, PaginationDto } from '../common/dto/pagination.dto';
+import { toBigIntString } from '../common/utils';
+import { listSupportedQuoteAssets, QuoteAssetConfig } from './quote-assets';
 
 @Controller('marketplace')
 export class MarketplaceController {
   constructor(
     private readonly dexService: DexService,
     private readonly liquidityService: LiquidityService,
+    private readonly stellarService: StellarService,
   ) {}
+
+  /**
+   * The canonical quote asset registry (issue #92). The frontend fetches
+   * this instead of hardcoding its own asset list, so the two never drift.
+   */
+  @Get('quote-assets')
+  listQuoteAssets(): readonly QuoteAssetConfig[] {
+    return listSupportedQuoteAssets();
+  }
 
   @Get('orders')
   async listOrders(
     @Query('bondId') bondId?: number,
     @Query('status') status?: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query() pagination: PaginationDto = new PaginationDto(),
   ): Promise<PaginatedResponse<OrderResponse>> {
     return this.dexService.listOrders(
       bondId ? Number(bondId) : undefined,
       status,
-      page || 1,
-      limit || 20,
+      pagination.page ?? 1,
+      pagination.limit ?? 20,
     );
   }
 
   @Post('list')
+  @RateLimit({ type: 'mutation' })
   @HttpCode(HttpStatus.CREATED)
   async listBondTokens(
     @Body() dto: ListBondDto,
@@ -52,6 +66,7 @@ export class MarketplaceController {
   }
 
   @Post('buy')
+  @RateLimit({ type: 'mutation' })
   @HttpCode(HttpStatus.OK)
   async buyBondTokens(
     @Body() dto: BuyBondDto,
@@ -70,7 +85,19 @@ export class MarketplaceController {
     return this.dexService.getQuoteBalance(address, query.asset ?? 'USDC');
   }
 
+  @Get('wallet-balance')
+  async getWalletBalance(
+    @Query() query: QuoteBalanceQueryDto,
+    @Req() req: any,
+  ): Promise<QuoteBalanceResponse> {
+    const address = req.headers['x-wallet-address'] as string || '';
+    const asset = query.asset ?? 'USDC';
+    const balanceStr = await this.stellarService.getBalance(address, asset);
+    return { address, asset, balance: balanceStr };
+  }
+
   @Post('deposit')
+  @RateLimit({ type: 'mutation' })
   @HttpCode(HttpStatus.OK)
   async depositQuote(
     @Body() dto: DepositQuoteDto,
@@ -81,6 +108,7 @@ export class MarketplaceController {
   }
 
   @Post('withdraw')
+  @RateLimit({ type: 'mutation' })
   @HttpCode(HttpStatus.OK)
   async withdrawQuote(
     @Body() dto: WithdrawQuoteDto,
@@ -91,6 +119,7 @@ export class MarketplaceController {
   }
 
   @Delete('orders/:id')
+  @RateLimit({ type: 'mutation' })
   @HttpCode(HttpStatus.NO_CONTENT)
   async cancelOrder(
     @Param('id', ParseIntPipe) id: number,

@@ -11,6 +11,7 @@ pub enum DataKey {
     ProjectId(u64),
     Nonce(Address),
     OwnerProjects(Address),
+    ProjectDocuments(u64),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -33,6 +34,8 @@ pub struct ProjectSummary {
     pub country: Symbol,
 }
 
+const MAX_DOCUMENTS: u32 = 10;
+
 fn project_id_to_bytes(env: &Env, id: u64) -> BytesN<32> {
     let mut arr = [0u8; 32];
     arr[..8].copy_from_slice(&id.to_be_bytes());
@@ -49,6 +52,19 @@ fn require_admin(env: &Env, caller: &Address) -> Result<(), RegistryError> {
         return Err(RegistryError::Unauthorized);
     }
     Ok(())
+}
+
+fn get_nonce(env: &Env, addr: &Address) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::Nonce(addr.clone()))
+        .unwrap_or(0)
+}
+
+fn set_nonce(env: &Env, addr: &Address, nonce: u64) {
+    env.storage()
+        .instance()
+        .set(&DataKey::Nonce(addr.clone()), &nonce);
 }
 
 #[contract]
@@ -111,6 +127,11 @@ impl ProjectRegistry {
             .instance()
             .set(&DataKey::Project(key), &project);
 
+        env.events().publish(
+            (Symbol::new(&env, "project_registered"),),
+            (new_id, caller.clone(), project.methodology.clone(), project.country.clone()),
+        );
+
         let mut owner_projects: Vec<u64> = env
             .storage()
             .instance()
@@ -162,6 +183,11 @@ impl ProjectRegistry {
             .instance()
             .set(&DataKey::Project(key), &project);
 
+        env.events().publish(
+            (Symbol::new(&env, "project_approved"),),
+            (project_id, caller),
+        );
+
         Ok(())
     }
 
@@ -203,6 +229,11 @@ impl ProjectRegistry {
             .instance()
             .set(&DataKey::Project(key), &project);
 
+        env.events().publish(
+            (Symbol::new(&env, "project_rejected"),),
+            (project_id, caller),
+        );
+
         Ok(())
     }
 
@@ -239,7 +270,7 @@ impl ProjectRegistry {
             {
                 result.push_back(ProjectSummary {
                     id: project.id,
-                    name: Symbol::new(&env, ""),
+                    name: project.methodology,
                     status: project.status,
                     country: project.country,
                 });
@@ -261,6 +292,60 @@ impl ProjectRegistry {
             .instance()
             .get(&DataKey::OwnerProjects(owner))
             .unwrap_or(vec![&env])
+    }
+
+    pub fn add_project_documents(
+        env: Env,
+        project_id: u64,
+        document_hashes: Vec<BytesN<32>>,
+    ) -> Result<(), RegistryError> {
+        if document_hashes.len() > MAX_DOCUMENTS {
+            return Err(RegistryError::InvalidArgument);
+        }
+        let key = DataKey::ProjectDocuments(project_id);
+        env.storage()
+            .instance()
+            .set(&key, &document_hashes);
+        Ok(())
+    }
+
+    pub fn get_project_documents(env: Env, project_id: u64) -> Vec<BytesN<32>> {
+        let key = DataKey::ProjectDocuments(project_id);
+        env.storage()
+            .instance()
+            .get(&key)
+            .unwrap_or(vec![&env])
+    }
+
+    pub fn set_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+        nonce: u64,
+    ) -> Result<(), RegistryError> {
+        current_admin.require_auth();
+
+        let expected_nonce = get_nonce(&env, &current_admin);
+        if nonce != expected_nonce {
+            return Err(RegistryError::InvalidNonce);
+        }
+        set_nonce(&env, &current_admin, expected_nonce + 1);
+
+        require_admin(&env, &current_admin)?;
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.events().publish(
+            (Symbol::new(&env, "admin_changed"),),
+            (current_admin, new_admin),
+        );
+
+        Ok(())
+    }
+
+    pub fn get_admin(env: Env) -> Result<Address, RegistryError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(RegistryError::NotInitialized)
     }
 }
 
@@ -492,11 +577,53 @@ mod test {
         assert_eq!(page1.get(0).unwrap().id, 1);
         assert_eq!(page1.get(1).unwrap().id, 2);
         assert_eq!(page1.get(2).unwrap().id, 3);
+        // name must be populated from methodology, not blank
+        assert_eq!(page1.get(0).unwrap().name, Symbol::new(&env, "VCS"));
+        assert_eq!(page1.get(1).unwrap().name, Symbol::new(&env, "VCS"));
+        assert_eq!(page1.get(2).unwrap().name, Symbol::new(&env, "VCS"));
 
         let page2 = client.list_projects(&1, &3);
         assert_eq!(page2.len(), 2);
         assert_eq!(page2.get(0).unwrap().id, 4);
         assert_eq!(page2.get(1).unwrap().id, 5);
+        assert_eq!(page2.get(0).unwrap().name, Symbol::new(&env, "VCS"));
+        assert_eq!(page2.get(1).unwrap().name, Symbol::new(&env, "VCS"));
+    }
+
+    #[test]
+    fn test_list_projects_name_matches_methodology() {
+        let (env, client, _admin, user) = setup();
+
+        let hash1 = create_hash(&env, 1);
+        client.register_project(
+            &user,
+            &hash1,
+            &Symbol::new(&env, "VCS"),
+            &Symbol::new(&env, "US"),
+            &0,
+        );
+
+        let hash2 = create_hash(&env, 2);
+        client.register_project(
+            &user,
+            &hash2,
+            &Symbol::new(&env, "GS"),
+            &Symbol::new(&env, "BR"),
+            &1,
+        );
+
+        let projects = client.list_projects(&0, &10);
+        assert_eq!(projects.len(), 2);
+
+        let summary1 = projects.get(0).unwrap();
+        assert_eq!(summary1.id, 1);
+        assert_eq!(summary1.name, Symbol::new(&env, "VCS"));
+        assert_eq!(summary1.country, Symbol::new(&env, "US"));
+
+        let summary2 = projects.get(1).unwrap();
+        assert_eq!(summary2.id, 2);
+        assert_eq!(summary2.name, Symbol::new(&env, "GS"));
+        assert_eq!(summary2.country, Symbol::new(&env, "BR"));
     }
 
     #[test]

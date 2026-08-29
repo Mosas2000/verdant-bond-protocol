@@ -1,9 +1,14 @@
 import { Global, Module } from '@nestjs/common';
 import { NonceService } from './services/nonce.service';
+import { RedisService } from './services/redis.service';
+import { SigningKeyProvider } from './services/signing-key.provider';
+import { RedisHealthController } from './redis-health.controller';
+import { ConfigService } from '../config/config.service';
 
 @Global()
 @Module({
-  providers: [NonceService],
-  exports: [NonceService],
+  controllers: [RedisHealthController],
+  providers: [NonceService, RedisService, SigningKeyProvider, ConfigService],
+  exports: [NonceService, RedisService, SigningKeyProvider, ConfigService],
 })
 export class CommonModule {}

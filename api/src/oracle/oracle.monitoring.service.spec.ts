@@ -3,6 +3,7 @@ import { OracleMonitoringService } from './oracle.monitoring.service';
 import { ProjectsService } from '../projects/projects.service';
 import { OracleService } from './oracle.service';
 import { ReportStatus } from './interfaces/oracle.interface';
+import { RedisService } from '../common/services/redis.service';
 
 const NOW = Date.UTC(2026, 0, 1, 0, 0, 0);
 const DAY = 24 * 60 * 60 * 1000;
@@ -49,6 +50,7 @@ describe('OracleMonitoringService', () => {
         OracleMonitoringService,
         { provide: ProjectsService, useValue: projectsService },
         { provide: OracleService, useValue: oracleService },
+        { provide: RedisService, useValue: { get: jest.fn(), setEx: jest.fn(), del: jest.fn() } },
       ],
     }).compile();
 
