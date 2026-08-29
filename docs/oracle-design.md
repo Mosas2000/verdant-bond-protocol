@@ -34,6 +34,41 @@ Key invariants:
 }
 ```
 
+## Evidence Manifest Schema (#113)
+
+Oracle adapters produce a canonical signed manifest tying raw observations, methodology, transformations, provider identity, and final submitted values together.
+
+```json
+{
+  "project_id": "VCS-1234",
+  "provider": "SatelliteProcessor",
+  "signer_public_key": "VERDANT_ORACLE_KEY_V1",
+  "methodology": "REMOTE_SENSING",
+  "period_start": "2025-01-01",
+  "period_end": "2025-12-31",
+  "carbon_sequestered": 50000,
+  "confidence": 0.85,
+  "raw_observations": {
+    "scene_ids": ["scene-101", "scene-102"],
+    "sources": ["sentinel-2"],
+    "scene_count": 2
+  },
+  "transformation_parameters": {
+    "bbox": [-62.5, -3.5, -62.0, -3.0],
+    "area_ha": 1000,
+    "baseline_ndvi": 0.45,
+    "max_cloud_cover": 20
+  },
+  "generated_at": "2025-12-31T23:59:59.000Z",
+  "signature": "hmac_sha256_hex_digest_over_canonical_json"
+}
+```
+
+### Verification Rules
+1. **Schema Validation**: Validated via Zod (`EvidenceManifestSchema`).
+2. **Signature Integrity**: HMAC-SHA256 signature generated over canonical (key-sorted) JSON of unsigned fields using provider key/secret. Tampered fields yield invalid signature verification.
+3. **API Matching**: The NestJS API verifies that `project_id`, `methodology`, `period_start`, `period_end`, and `carbon_sequestered` in the manifest match the submitted DTO values exactly before transaction invocation.
+
 ## Evidence Hash Requirements
 
 `ipfs_evidence_hash` (and the API's `SubmitReportDto.evidenceHash`) is a
