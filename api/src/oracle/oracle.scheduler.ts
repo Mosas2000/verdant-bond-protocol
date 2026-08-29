@@ -44,9 +44,10 @@ export class OracleScheduler {
     this.logger.log('Oracle reliability monitoring cycle started');
 
     try {
-      const alerted = await this.monitoringService.alertStaleProjects();
+      const summary = await this.monitoringService.syncIncidents();
       this.logger.log(
-        `Oracle reliability monitoring cycle completed: ${alerted} alert(s) emitted`,
+        `Oracle reliability monitoring cycle completed: ${summary.created} incident(s) created, ` +
+          `${summary.updated} updated, ${summary.escalated} escalated`,
       );
     } catch (error) {
       this.logger.error(`Oracle reliability monitoring error: ${error.message}`);
