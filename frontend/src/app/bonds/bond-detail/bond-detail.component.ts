@@ -2,10 +2,11 @@ import { Component, inject, OnInit, OnDestroy, ChangeDetectionStrategy, signal, 
 import { CommonModule } from '@angular/common';
 import { RouterModule, ActivatedRoute } from '@angular/router';
 import { FormsModule } from '@angular/forms';
-import { ApiService } from '../../shared/services/api.service';
+import { ApiService, CouponEligibility } from '../../shared/services/api.service';
 import { WalletService } from '../../auth/wallet.service';
 import { StatusBadgeComponent } from '../../shared/components/status-badge/status-badge.component';
 import { LoadingSpinnerComponent } from '../../shared/components/loading-spinner/loading-spinner.component';
+import { BondDetailReloadCoordinator } from './bond-detail.reload-coordinator';
 import { Bond } from '../../shared/interfaces/bond.interface';
 import { environment } from '../../../environments/environment';
 
@@ -13,9 +14,14 @@ import { environment } from '../../../environments/environment';
   selector: 'app-bond-detail',
   standalone: true,
   imports: [CommonModule, RouterModule, FormsModule, StatusBadgeComponent, LoadingSpinnerComponent],
+  providers: [BondDetailReloadCoordinator],
   template: `
     <div class="detail-page">
       <a class="back-link" routerLink="/bonds">← Back to Bonds</a>
+
+      @if (refreshing()) {
+        <div class="refresh-banner">Refreshing bond data…</div>
+      }
 
       @if (bond(); as b) {
         <div class="detail-grid">
@@ -34,6 +40,16 @@ import { environment } from '../../../environments/environment';
                 <strong>Matures in:</strong> {{ countdown() }}
               }
             </div>
+
+            @if (couponEligibility() && !couponEligibility()!.eligible) {
+              <div class="coupon-warning">
+                <strong>Coupon distribution blocked.</strong>
+                The referenced oracle report is disputed or rejected.
+                @for (reason of couponEligibility()!.reasons; track reason) {
+                  <div class="coupon-reason">• {{ reason }}</div>
+                }
+              </div>
+            }
 
             <div class="detail-body">
               <div class="detail-field">
@@ -127,6 +143,24 @@ import { environment } from '../../../environments/environment';
               </a>
             </div>
 
+            <div class="holders-section">
+              <h3 class="section-title">Holders ({{ holders().length }})</h3>
+              @if (sectionLoading().holders) {
+                <div class="muted">Loading holders…</div>
+              } @else if (holders().length === 0) {
+                <div class="muted">No holders yet.</div>
+              } @else {
+                <ul class="holders-list">
+                  @for (h of holders(); track h.address) {
+                    <li class="holder-item">
+                      <span class="mono">{{ h.address }}</span>
+                      <span class="holder-balance">{{ h.balance | number }}</span>
+                    </li>
+                  }
+                </ul>
+              }
+            </div>
+
             <div class="claim-section">
               <h3 class="section-title">Claim Credits</h3>
               <button
@@ -148,6 +182,13 @@ import { environment } from '../../../environments/environment';
 
             <div class="transfer-section">
               <h3 class="section-title">Transfer Tokens</h3>
+              <button
+                class="btn btn-outline refresh-btn"
+                [disabled]="refreshing()"
+                (click)="onRefresh()"
+              >
+                {{ refreshing() ? 'Refreshing…' : 'Refresh' }}
+              </button>
               @if (maturityReached()) {
                 <p class="status-notice">Transfers are disabled after the maturity date.</p>
               } @else {
@@ -243,6 +284,8 @@ import { environment } from '../../../environments/environment';
     .detail-title { font-size: 1.5rem; font-weight: 700; }
     .maturity-banner { display: flex; gap: 8px; padding: 12px 16px; border-radius: 8px; background: #fffbeb; border: 1px solid #fde68a; color: #92400e; font-size: 0.875rem; margin-bottom: 24px; }
     .maturity-banner.frozen { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+    .coupon-warning { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; border-radius: 8px; background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; font-size: 0.875rem; margin-bottom: 24px; }
+    .coupon-reason { font-size: 0.8125rem; }
     .detail-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
     .detail-field { display: flex; flex-direction: column; }
     .field-label { font-size: 0.75rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
@@ -279,6 +322,13 @@ import { environment } from '../../../environments/environment';
     .admin-section { margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
     .admin-note { font-size: 0.8125rem; color: #6b7280; padding: 8px 0; }
     .undistributed-total { display: flex; flex-direction: column; margin-bottom: 12px; }
+    .refresh-banner { padding: 10px 16px; border-radius: 8px; background: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8; font-size: 0.8125rem; margin-bottom: 16px; }
+    .refresh-btn { width: 100%; margin-top: 16px; }
+    .holders-section { margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
+    .holders-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+    .holder-item { display: flex; justify-content: space-between; gap: 8px; font-size: 0.8125rem; padding: 6px 10px; background: #f9fafb; border-radius: 6px; }
+    .holder-balance { font-family: monospace; }
+    .muted { font-size: 0.8125rem; color: #6b7280; }
   `],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
@@ -286,10 +336,24 @@ export class BondDetailComponent implements OnInit, OnDestroy {
   private readonly route = inject(ActivatedRoute);
   private readonly apiService = inject(ApiService);
   private readonly walletService = inject(WalletService);
+  private readonly coordinator = inject(BondDetailReloadCoordinator);
 
-  readonly bond = signal<Bond | null>(null);
-  readonly loading = signal(true);
+  /**
+   * Every panel (summary, holders, coupon, maturity) is derived from the single
+   * snapshot the coordinator commits after each `reload()`, so the view can never
+   * show a mix of pre- and post-mutation data. See issue #4.
+   */
+  readonly bond = computed<Bond | null>(() => this.coordinator.detail()?.bond ?? null);
+  readonly holders = computed(() => this.coordinator.detail()?.holders ?? []);
+  readonly undistributed = computed<number | null>(() => {
+    const d = this.coordinator.detail();
+    return d ? Number(d.coupon.undistributedTotal) : null;
+  });
+  readonly loading = this.coordinator.loading;
+  readonly refreshing = this.coordinator.loading;
+  readonly sectionLoading = this.coordinator.sectionLoading;
   readonly error = signal('');
+  readonly couponEligibility = signal<CouponEligibility | null>(null);
   readonly now = signal(Date.now());
   readonly subscribeSubmitting = signal(false);
   readonly subscribeSuccess = signal(false);
@@ -304,8 +368,7 @@ export class BondDetailComponent implements OnInit, OnDestroy {
   readonly transferSuccess = signal(false);
   readonly transferTx = signal('');
   readonly transferError = signal('');
-  readonly undistributed = signal<number | null>(null);
-  readonly undistributedError = signal('');
+  readonly undistributedError = computed(() => this.coordinator.error() ?? '');
   readonly sweepSubmitting = signal(false);
   readonly sweepSuccess = signal(false);
   readonly sweepSwept = signal(0);
@@ -329,20 +392,21 @@ export class BondDetailComponent implements OnInit, OnDestroy {
 
   private maturityTimer?: ReturnType<typeof setInterval>;
 
-  private undistributedLoaded = false;
-
-  private readonly loadUndistributedEffect = effect(() => {
-    const b = this.bond();
-    if (b && this.isAdmin() && !this.undistributedLoaded) {
-      this.undistributedLoaded = true;
-      this.apiService.getUndistributedTotal(b.id).subscribe({
-        next: (res) => this.undistributed.set(Number(res.undistributedTotal)),
-        error: (err) =>
-          this.undistributedError.set(
-            err.error?.detail || err.message || 'Failed to load undistributed total',
-          ),
-      });
+  /**
+   * Load coupon eligibility whenever the committed bond snapshot changes. The
+   * projectId is only known after the detail loads, so we react to the snapshot
+   * rather than firing it inline in `reload()`.
+   */
+  private readonly couponEligibilityEffect = effect(() => {
+    const projectId = this.coordinator.detail()?.bond.projectId;
+    if (!projectId) {
+      this.couponEligibility.set(null);
+      return;
     }
+    this.apiService.getCouponEligibility(projectId).subscribe({
+      next: (eligibility) => this.couponEligibility.set(eligibility),
+      error: () => this.couponEligibility.set(null),
+    });
   }, { allowSignalWrites: true });
 
   subscribeAmount = 0;
@@ -379,16 +443,18 @@ export class BondDetailComponent implements OnInit, OnDestroy {
       return;
     }
     this.maturityTimer = setInterval(() => this.now.set(Date.now()), 1000);
-    this.apiService.getBond(id).subscribe({
-      next: (bond) => {
-        this.bond.set(bond);
-        this.loading.set(false);
-      },
-      error: (err) => {
-        this.error.set(err.status === 404 ? 'Bond not found' : 'Failed to load bond');
-        this.loading.set(false);
-      },
-    });
+    this.reload(id);
+  }
+
+  /** Atomically refresh every panel of this bond (issue #4 refresh model). */
+  reload(id: number): void {
+    this.coordinator.reload(id);
+  }
+
+  /** Manual refresh triggered by the UI button. */
+  onRefresh(): void {
+    const b = this.bond();
+    if (b) this.reload(b.id);
   }
 
   ngOnDestroy(): void {
@@ -409,9 +475,7 @@ export class BondDetailComponent implements OnInit, OnDestroy {
         this.subscribeSuccess.set(true);
         this.subscribeTx.set(res.transactionHash);
         this.subscribeSubmitting.set(false);
-        this.apiService.getBond(b.id).subscribe({
-          next: (updated) => this.bond.set(updated),
-        });
+        this.reload(b.id);
       },
       error: (err) => {
         this.subscribeError.set(err.error?.detail || err.message || 'Subscription failed');
@@ -433,6 +497,7 @@ export class BondDetailComponent implements OnInit, OnDestroy {
         this.claimCredits.set(Number(res.credits));
         this.claimTx.set(res.transactionHash);
         this.claimSubmitting.set(false);
+        this.reload(b.id);
       },
       error: (err) => {
         this.claimError.set(err.error?.detail || err.message || 'Claim failed');
@@ -455,6 +520,7 @@ export class BondDetailComponent implements OnInit, OnDestroy {
         this.transferSubmitting.set(false);
         this.transferTo = '';
         this.transferAmount = 0;
+        this.reload(b.id);
       },
       error: (err) => {
         this.transferError.set(err.error?.detail || err.message || 'Transfer failed');
@@ -483,7 +549,7 @@ export class BondDetailComponent implements OnInit, OnDestroy {
         this.sweepSwept.set(Number(res.swept));
         this.sweepTx.set(res.transactionHash);
         this.sweepSubmitting.set(false);
-        this.undistributed.set(0);
+        this.reload(b.id);
       },
       error: (err) => {
         this.sweepError.set(err.error?.detail || err.message || 'Sweep failed');

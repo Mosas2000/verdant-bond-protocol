@@ -25,6 +25,12 @@ export interface HeldBond extends Bond {
   balance: string;
 }
 
+/** A single bond holder and their token balance (issue #4 detail refresh). */
+export interface HolderResponse {
+  address: string;
+  balance: string;
+}
+
 export interface Project {
   id: number;
   name: string;

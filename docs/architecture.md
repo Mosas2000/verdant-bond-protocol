@@ -200,6 +200,26 @@ Reports follow a strict status lifecycle managed by `OracleConsumer`:
 - **Tradeoff:** lazy/opportunistic cleanup was considered and rejected: marking an order `Expired` inside `execute_purchase`'s error path cannot work (a Soroban call that returns an error reverts all writes), and scanning a seller's full order list inside `list_bond_tokens` would reintroduce unbounded cost on a user path. The periodic cursor-batched admin sweep is the cleanup mechanism.
 - `cancel_listing` releases the escrowed bond tokens back to the seller's control.
 - **Escrow Design**: Both buyers and sellers have escrow protections:
+
+## Marketplace Reconciliation
+
+The API keeps an indexed/cached view of marketplace state (quote-balance cache in
+`DexService` plus the order caches used by `listOrders`/`getOrder`). To catch
+divergence, cache-invalidation gaps, or unexpected on-chain movement, a scheduled
+reconciliation job (`DexReconciliationService`, cron `DEX_RECON_CRON`, default
+every 10 minutes) compares this view against the DEXRouter ledger:
+
+- **Quote balances** — `quote:balance:<addr>:<asset>` vs `get_quote_balance`.
+- **Open orders** — the API order index vs `get_order` status; plus an escrow
+  invariant (`pricePerToken * amount <= seller on-chain balance`).
+- **Missing orders** — on-chain open orders absent from the API index.
+
+Mismatches are logged with a `correlationId` and persisted to
+`dex:recon:last` / `dex:recon:mismatches`. The repair path (`repair()` and
+`POST /marketplace/reconciliation/repair`) evicts the affected caches so the next
+read re-fetches from the ledger. See
+`docs/runbook-marketplace-reconciliation.md` for the operator investigation and
+repair steps.
   - **Buyers**: Quote asset escrowed at `deposit_quote`; balance checked before transfer.
   - **Sellers**: Bond tokens escrowed at `list_bond_tokens`; balance checked before transfer. Prevents order fulfillment failure due to seller side-transfers.
 
@@ -307,8 +327,14 @@ and indistinguishable from cache. It is now a three-layer model:
 | POST   | /oracle/reports                | Submit oracle report                                |
 | GET    | /oracle/reports/:projectId     | Get project oracle history                          |
 | POST   | /oracle/challenge/:reportId    | Challenge a report                                  |
+| GET    | /oracle/reports/:projectId/challenges | List challenged reports for a project (with challenge detail) |
+| GET    | /oracle/challenges/:reportId   | Challenge state + resolution history for a report  |
+| GET    | /oracle/projects/:projectId/coupon-eligibility | Coupon-distribution eligibility for a project |
 | GET    | /oracle/stats/:providerAddress | Provider stats + slash/challenge history            |
 | GET    | /oracle/monitoring/staleness   | Per-project/provider staleness metric               |
+| POST   | /marketplace/reconciliation/run | Operator: run quote-balance/order reconciliation   |
+| GET    | /marketplace/reconciliation/mismatches | Operator: list last reconciliation mismatches |
+| POST   | /marketplace/reconciliation/repair | Operator: repair stale cache/index records      |
 
 ## Frontend
 
