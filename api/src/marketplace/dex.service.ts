@@ -5,6 +5,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ContractService } from '../stellar/contract.service';
+import { ContractException } from '../stellar/contract-errors';
 import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
 import { RedisService } from '../common/services/redis.service';
@@ -330,6 +331,21 @@ export class DexService {
   }
 
   private mapDexError(error: unknown): Error {
+    if (error instanceof HttpException) {
+      return error;
+    }
+
+    if (error instanceof ContractException) {
+      const code = error.rawErrorCode as number | undefined;
+      if (code === DEX_ERROR_CODE.InsufficientFunds) {
+        return new HttpException(
+          'Insufficient escrowed funds. Call POST /marketplace/escrow/deposit before purchasing.',
+          HttpStatus.PAYMENT_REQUIRED,
+        );
+      }
+      return new BadRequestException(error.detail || String(error.message));
+    }
+
     const message = error instanceof Error ? error.message : String(error);
     const match = message.match(/#(\d+)/) ?? message.match(/Error\(-(\d+)/);
     const code = match ? Number(match[1]) : undefined;
@@ -339,10 +355,6 @@ export class DexService {
         'Insufficient escrowed funds. Call POST /marketplace/escrow/deposit before purchasing.',
         HttpStatus.PAYMENT_REQUIRED,
       );
-    }
-
-    if (error instanceof HttpException) {
-      return error;
     }
 
     return new BadRequestException(message);

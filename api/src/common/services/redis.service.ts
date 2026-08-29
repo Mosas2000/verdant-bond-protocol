@@ -141,6 +141,24 @@ export class RedisService {
     }
   }
 
+  async expire(key: string, seconds: number): Promise<boolean> {
+    try {
+      return await this.redis.expire(key, seconds);
+    } catch (error) {
+      this.logDegraded('expire', key, error);
+      return false;
+    }
+  }
+
+  async ttl(key: string): Promise<number> {
+    try {
+      return await this.redis.ttl(key);
+    } catch (error) {
+      this.logDegraded('ttl', key, error);
+      return -1;
+    }
+  }
+
   private logDegraded(operation: string, key: string, error: unknown): void {
     this.healthy = false;
     this.logger.warn(`Redis ${operation} failed for ${key}; continuing without cache: ${this.message(error)}`);

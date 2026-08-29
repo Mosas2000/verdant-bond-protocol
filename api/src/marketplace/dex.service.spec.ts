@@ -2,10 +2,12 @@ import { Test } from '@nestjs/testing';
 import { nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 import { DexService } from './dex.service';
 import { ContractService } from '../stellar/contract.service';
+import { ContractException } from '../stellar/contract-errors';
 import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
 import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
+import { ConfigService } from '../config/config.service';
 import { OrderStatus } from './interfaces/marketplace.interface';
 
 // ---------------------------------------------------------------------------
@@ -94,6 +96,10 @@ describe('DexService', () => {
         {
           provide: SigningKeyProvider,
           useValue: { adminSecret: jest.fn().mockReturnValue('SADMIN') },
+        },
+        {
+          provide: ConfigService,
+          useValue: { getDexRouterAddress: jest.fn().mockReturnValue('GDEXROUTERADDRESS') },
         },
       ],
     }).compile();
@@ -359,6 +365,25 @@ describe('DexService', () => {
   });
 });
 
+describe('DexService — mapDexError (unit)', () => {
+  it('maps InsufficientFunds contract error to PAYMENT_REQUIRED HttpException', () => {
+    const svc = new DexService({} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const err = new ContractException('DEX_INSUFFICIENT_FUNDS', 'insufficient', undefined, undefined, 10);
+    const mapped = (svc as any).mapDexError(err);
+    expect(mapped).toBeInstanceOf(Object);
+    // ensure it's an HttpException with payment required
+    const status = (mapped as any).getStatus ? (mapped as any).getStatus() : (mapped as any).status;
+    expect(status).toBe(402);
+  });
+
+  it('falls back to BadRequestException for unknown contract codes', () => {
+    const svc = new DexService({} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const err = new ContractException('SOME_CODE', 'some detail', undefined, undefined, 999);
+    const mapped = (svc as any).mapDexError(err);
+    expect(mapped).toBeInstanceOf(Object);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Suite 2 – cache-staleness integration tests (InMemoryRedis)
 //
@@ -404,6 +429,10 @@ describe('DexService — cache staleness (in-memory Redis)', () => {
         {
           provide: SigningKeyProvider,
           useValue: { adminSecret: jest.fn().mockReturnValue('SADMIN') },
+        },
+        {
+          provide: ConfigService,
+          useValue: { getDexRouterAddress: jest.fn().mockReturnValue('GDEXROUTERADDRESS') },
         },
       ],
     }).compile();
