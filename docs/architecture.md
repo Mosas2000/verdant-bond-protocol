@@ -6,7 +6,8 @@
 
 ```rust
 // Public functions
-pub fn issue_bond(...)
+pub fn issue_bond(...)                         // validates project is Approved via ProjectRegistry
+pub fn set_project_registry(caller, registry)  // admin: link ProjectRegistry for cross-contract validation
 pub fn subscribe(...)
 pub fn transfer(from, to, bond_id, amount, nonce)   // replay-protected on-chain token transfer
 pub fn fund_redemption(caller, bond_id, amount, nonce)  // admin funds principal escrow
@@ -80,10 +81,14 @@ pub fn get_orders_by_seller(...)
 ```rust
 // Public functions
 pub fn register_project(...)
-pub fn approve_project(...)
-pub fn reject_project(...)
+pub fn approve_project(...)                    // Pending -> Approved (admin)
+pub fn reject_project(...)                     // Pending -> Rejected (admin)
+pub fn deactivate_project(caller, project_id)  // Approved -> Inactive (admin, for fraud/withdrawal)
+pub fn resubmit_project(caller, project_id, updated_ipfs_hash) // Rejected -> Pending (owner, preserves id/history)
 pub fn get_project(...)
 pub fn get_all_projects(...)
+pub fn has_approved_project(key)               // view: true iff status == Approved
+pub fn project_key(project_id)                 // helper: u64 -> BytesN<32> storage key
 ```
 
 ### CreditRetirement
@@ -103,6 +108,7 @@ pub fn get_retired_balance(...)
 | BondIssuer      | HolderBalance(bond_id, holder) | i128           | Token balance                                                   |
 | BondIssuer      | BondState(bond_id)             | BondState      | Current bond state                                              |
 | BondIssuer      | RedemptionPool(bond_id)        | i128           | Escrowed face-value principal available for matured redemptions |
+| BondIssuer      | ProjectRegistry                | Address        | Optional cross-contract link enforcing Approved-only issuance   |
 | CouponEngine    | Coupon(bond_id, period)        | CouponData     | Coupon distribution                                             |
 | CouponEngine    | Accrued(bond_id, holder)       | i128           | Accrued credits                                                 |
 | CouponEngine    | UndistributedTotal(bond_id)    | i128           | Unallocated coupon dust                                         |
@@ -116,12 +122,28 @@ pub fn get_retired_balance(...)
 ## Cross-Contract Calls
 
 ```
-ProjectRegistry ──► BondIssuer (verify project exists)
+BondIssuer ──► ProjectRegistry (verify project is Approved; rejects Inactive/unregistered via has_approved_project)
+ProjectRegistry ──► BondIssuer (legacy verify path)
 BondIssuer ──► CouponEngine (distribute coupons)
 CouponEngine ──► OracleConsumer (read verified reports by report_id)
 DEXRouter ──► BondIssuer (settle purchase via transfer, debiting seller / crediting buyer)
 CreditRetirement ──► CouponEngine (verify credit ownership)
 ```
+
+## Project Lifecycle
+
+```
+Pending ──approve_project(admin)──► Approved ──deactivate_project(admin)──► Inactive (terminal)
+  │                                     │
+  └──reject_project(admin)──► Rejected ─┘
+                                │
+                                └──resubmit_project(owner, updated_ipfs_hash)──► Pending (same project_id, history preserved)
+```
+
+- `register_project` creates a `Pending` project. Only an admin may `approve_project` (→ `Approved`) or `reject_project` (→ `Rejected`) from `Pending`.
+- `deactivate_project` transitions an `Approved` project to `Inactive` (admin-only). This is the retirement path for fraudulent or withdrawn projects; `Inactive` is terminal.
+- `resubmit_project` allows the original owner to return a `Rejected` project to `Pending` with updated IPFS documentation, preserving `project_id` and on-chain history (vs. registering a new id).
+- `BondIssuer.issue_bond` cross-calls `ProjectRegistry.has_approved_project(project_id)` when a registry is linked via `set_project_registry`. Only `Approved` projects may back new bonds; `Inactive`, `Rejected`, `Pending`, and unregistered projects are rejected with `BondError::ProjectNotApproved`.
 
 ## Oracle Report Status Machine
 
