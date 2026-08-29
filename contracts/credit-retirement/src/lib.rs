@@ -186,7 +186,7 @@ impl CreditRetirement {
             .set(&DataKey::HolderRetirements(holder.clone()), &retirements);
 
         env.events().publish(
-            (Symbol::new(&env, "CreditsRetired"),),
+            (Symbol::new(&env, "credits_retired"),),
             (holder.clone(), amount, credit_type),
         );
 

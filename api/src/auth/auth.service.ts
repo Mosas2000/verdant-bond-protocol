@@ -18,15 +18,38 @@ import { StellarService } from '../stellar/stellar.service';
 import { KycService } from './kyc.service';
 import { VerifySignatureDto } from './dto/verify-signature.dto';
 import { ChallengeResponse, AuthTokenResponse, UserProfileResponse } from './interfaces/auth.interface';
+import { ConfigService } from '../config/config.service';
+
+const CHALLENGE_TTL_SECONDS = 300;
+
+interface StoredChallenge {
+  challenge: string;
+  nonce: string;
+  address: string;
+  timestamp: number;
+  audience: string;
+}
+
+const AUDIENCE =
+  process.env.APP_URL || process.env.BASE_URL || 'verdant-bond-protocol';
 
 @Injectable()
 export class AuthService {
+  private readonly accessTokenExpiry: string;
+  private readonly refreshTokenExpiry: string;
+  private readonly refreshTokenSecret: string;
+
   constructor(
     private readonly jwtService: JwtService,
     private readonly kycService: KycService,
     private readonly stellarService: StellarService,
     private readonly redis: RedisService,
-  ) {}
+    private readonly config: ConfigService,
+  ) {
+    this.accessTokenExpiry = this.config.getJwtExpiry();
+    this.refreshTokenExpiry = this.config.getJwtRefreshExpiry();
+    this.refreshTokenSecret = this.config.getJwtRefreshSecret();
+  }
 
   async generateChallenge(address: string): Promise<ChallengeResponse> {
     if (!this.stellarService.isValidPublicKey(address)) {
@@ -64,15 +87,59 @@ export class AuthService {
     challengeTransaction.sign(serverKeypair);
     const challenge = challengeTransaction.toXDR();
 
-    await this.redis.set(`challenge:${address}`, challenge, { EX: 300 });
+    const stored: StoredChallenge = {
+      challenge,
+      nonce,
+      address,
+      timestamp,
+      audience: AUDIENCE,
+    };
+
+    await this.redis.set(
+      `challenge:${address}`,
+      JSON.stringify(stored),
+      { EX: CHALLENGE_TTL_SECONDS },
+    );
 
     return { challenge, nonce };
   }
 
   async verifySignature(dto: VerifySignatureDto): Promise<AuthTokenResponse> {
-    const storedChallenge = await this.redis.get(`challenge:${dto.address}`);
-    if (!storedChallenge || storedChallenge !== dto.originalChallenge) {
-      throw new UnauthorizedException('Challenge not found or expired');
+    const raw = await this.redis.getDel(`challenge:${dto.address}`);
+    if (!raw) {
+      throw new UnauthorizedException(
+        'Challenge not found, expired, or already consumed. Please request a fresh challenge.',
+      );
+    }
+
+    let stored: StoredChallenge;
+    try {
+      stored = JSON.parse(raw) as StoredChallenge;
+    } catch {
+      throw new UnauthorizedException(
+        'Challenge record is malformed. Please request a fresh challenge.',
+      );
+    }
+
+    if (stored.address !== dto.address) {
+      throw new UnauthorizedException(
+        'Challenge was not issued for this address. Please request a fresh challenge.',
+      );
+    }
+
+    if (stored.challenge !== dto.originalChallenge) {
+      throw new UnauthorizedException(
+        'Challenge content does not match issued challenge. Please request a fresh challenge.',
+      );
+    }
+
+    if (
+      stored.timestamp <
+      Date.now() - CHALLENGE_TTL_SECONDS * 1000
+    ) {
+      throw new UnauthorizedException(
+        'Challenge has expired. Please request a fresh challenge.',
+      );
     }
 
     const serverSecretKey = process.env.STELLAR_AUTH_SECRET_KEY || process.env.ADMIN_SECRET_KEY;
@@ -113,22 +180,36 @@ export class AuthService {
       throw new UnauthorizedException('Invalid signature');
     }
 
-    await this.redis.del(`challenge:${dto.address}`);
-
     const kycStatus = await this.kycService.getStatus(dto.address);
 
     const payload = { sub: dto.address, kycStatus };
     const accessToken = this.jwtService.sign(payload);
+    const refreshToken = this.jwtService.sign(
+      { ...payload, tokenType: 'refresh' },
+      { secret: this.refreshTokenSecret, expiresIn: this.refreshTokenExpiry },
+    );
 
-    return { accessToken, tokenType: 'Bearer', expiresIn: '7d' };
+    return {
+      accessToken,
+      refreshToken,
+      tokenType: 'Bearer',
+      expiresIn: this.accessTokenExpiry,
+      refreshExpiresIn: this.refreshTokenExpiry,
+    };
   }
 
   async refreshToken(token: string): Promise<AuthTokenResponse> {
     try {
-      const payload = this.jwtService.verify(token) as { sub: string; kycStatus: string };
+      const payload = this.jwtService.verify(token, {
+        secret: this.refreshTokenSecret,
+      }) as { sub: string; kycStatus: string; tokenType: string };
+      if (payload.tokenType !== 'refresh') {
+        throw new UnauthorizedException('Invalid refresh token');
+      }
+
       const newPayload = { sub: payload.sub, kycStatus: payload.kycStatus };
       const accessToken = this.jwtService.sign(newPayload);
-      return { accessToken, tokenType: 'Bearer', expiresIn: '7d' };
+      return { accessToken, tokenType: 'Bearer', expiresIn: this.accessTokenExpiry };
     } catch {
       throw new UnauthorizedException('Invalid or expired token');
     }

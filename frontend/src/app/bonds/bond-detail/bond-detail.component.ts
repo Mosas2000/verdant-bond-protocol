@@ -336,7 +336,7 @@ export class BondDetailComponent implements OnInit, OnDestroy {
     if (b && this.isAdmin() && !this.undistributedLoaded) {
       this.undistributedLoaded = true;
       this.apiService.getUndistributedTotal(b.id).subscribe({
-        next: (res) => this.undistributed.set(res.undistributedTotal),
+        next: (res) => this.undistributed.set(Number(res.undistributedTotal)),
         error: (err) =>
           this.undistributedError.set(
             err.error?.detail || err.message || 'Failed to load undistributed total',
@@ -351,8 +351,8 @@ export class BondDetailComponent implements OnInit, OnDestroy {
 
   subscribeProgress(): number {
     const b = this.bond();
-    if (!b || b.totalSupply === 0) return 0;
-    return Math.round((b.totalSubscribed / b.totalSupply) * 100);
+    if (!b || Number(b.totalSupply) === 0) return 0;
+    return Math.round((Number(b.totalSubscribed) / Number(b.totalSupply)) * 100);
   }
 
   formatCountdown(ms: number): string {
@@ -430,7 +430,7 @@ export class BondDetailComponent implements OnInit, OnDestroy {
     this.apiService.claimCredits(b.id).subscribe({
       next: (res) => {
         this.claimSuccess.set(true);
-        this.claimCredits.set(res.credits);
+        this.claimCredits.set(Number(res.credits));
         this.claimTx.set(res.transactionHash);
         this.claimSubmitting.set(false);
       },
@@ -480,7 +480,7 @@ export class BondDetailComponent implements OnInit, OnDestroy {
     this.apiService.sweepUndistributed(b.id).subscribe({
       next: (res) => {
         this.sweepSuccess.set(true);
-        this.sweepSwept.set(res.swept);
+        this.sweepSwept.set(Number(res.swept));
         this.sweepTx.set(res.transactionHash);
         this.sweepSubmitting.set(false);
         this.undistributed.set(0);

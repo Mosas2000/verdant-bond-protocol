@@ -16,13 +16,13 @@ describe('BondDetailComponent', () => {
   const bond = {
     id: 1,
     projectId: 'a1b2',
-    faceValue: 1000,
-    couponSchedule: [1000000, 2000000],
+    faceValue: '1000',
+    couponSchedule: ['1000000', '2000000'],
     creditType: 'Carbon' as const,
     maturityDate: 3000000,
     maturityStatus: 'Active' as const,
-    totalSupply: 10000,
-    totalSubscribed: 5000,
+    totalSupply: '10000',
+    totalSubscribed: '5000',
     status: 'Active' as const,
     createdAt: '2026-01-01T00:00:00.000Z',
   };
@@ -43,10 +43,10 @@ describe('BondDetailComponent', () => {
     ]);
     apiService.getBond.and.returnValue(of(bond));
     apiService.getUndistributedTotal.and.returnValue(
-      of({ bondId: 1, undistributedTotal: 7 }),
+      of({ bondId: 1, undistributedTotal: '7' }),
     );
     apiService.sweepUndistributed.and.returnValue(
-      of({ bondId: 1, swept: 7, transactionHash: '0xabc' }),
+      of({ bondId: 1, swept: '7', transactionHash: '0xabc' }),
     );
 
     await TestBed.configureTestingModule({

@@ -58,6 +58,7 @@ pub enum RegistryError {
     ProjectAlreadyExists = 4,
     InvalidStatusTransition = 5,
     InvalidNonce = 6,
+    InvalidArgument = 7,
 }
 
 #[derive(Clone, Debug, PartialEq)]

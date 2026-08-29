@@ -1,14 +1,25 @@
-import { Component, inject, OnInit, ChangeDetectionStrategy, signal, computed } from '@angular/core';
+import { Component, inject, OnInit, OnDestroy, ChangeDetectionStrategy, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule, ActivatedRoute, Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
+import { HttpErrorResponse } from '@angular/common/http';
+import { Subject, EMPTY, Observable, defer, timer, switchMap, takeUntil, retry, tap, finalize, catchError, throwError } from 'rxjs';
 import { ApiService } from '../../shared/services/api.service';
 import { AuthService } from '../../auth/auth.service';
 import { WalletService } from '../../auth/wallet.service';
 import { StatusBadgeComponent } from '../../shared/components/status-badge/status-badge.component';
 import { LoadingSpinnerComponent } from '../../shared/components/loading-spinner/loading-spinner.component';
 import { QuoteBalanceComponent, QuoteBalances } from '../../shared/components/quote-balance/quote-balance.component';
-import { Order, Bond, QuoteAsset } from '../../shared/interfaces/bond.interface';
+import { Order, Bond, QuoteAsset, PaginatedResponse } from '../../shared/interfaces/bond.interface';
+import { appErrorMessage, normalizeApiError } from '../../shared/errors/api-error';
+
+export const ORDERS_RETRY_COUNT = 3;
+export const ORDERS_RETRY_BASE_DELAY_MS = 500;
+export const ORDERS_RETRY_MAX_DELAY_MS = 4000;
+// Reconciliation (#91): background polling interval for the open-orders list,
+// so an order filled/cancelled/expired elsewhere is reflected here without
+// requiring a manual refresh.
+export const ORDERS_POLL_INTERVAL_MS = 15000;
 
 @Component({
   selector: 'app-marketplace-list',
@@ -66,6 +77,7 @@ import { Order, Bond, QuoteAsset } from '../../shared/interfaces/bond.interface'
         <div class="orders-section">
           <div class="section-header">
             <h3 class="section-title">Open Orders ({{ orders().length }})</h3>
+            <button class="btn btn-sm btn-outline" (click)="refreshOrders()">Refresh</button>
           </div>
 
           @if (orders().length === 0) {
@@ -122,7 +134,7 @@ import { Order, Bond, QuoteAsset } from '../../shared/interfaces/bond.interface'
                                   </div>
                                 }
                                 <div class="buy-actions">
-                                  <button class="btn btn-sm btn-primary" (click)="onBuy(order)" [disabled]="buySubmitting() || !canConfirm(order)">Confirm</button>
+                                  <button class="btn btn-sm btn-primary" (click)="onBuy(order)" [disabled]="actionPending() || !canConfirm(order)">Confirm</button>
                                   <button class="btn btn-sm btn-outline" (click)="cancelBuy()">Cancel</button>
                                 </div>
                                 @if (buyError()) {
@@ -145,6 +157,9 @@ import { Order, Bond, QuoteAsset } from '../../shared/interfaces/bond.interface'
         @if (walletService.isConnected() && myOrders().length > 0) {
           <div class="orders-section my-orders">
             <h3 class="section-title">My Orders</h3>
+            @if (cancelError()) {
+              <div class="error-banner">{{ cancelError() }}</div>
+            }
             <div class="orders-table-wrapper">
               <table class="orders-table">
                 <thead>
@@ -167,7 +182,19 @@ import { Order, Bond, QuoteAsset } from '../../shared/interfaces/bond.interface'
                       <td>{{ order.pricePerToken }}</td>
                       <td><app-status-badge [status]="order.status" variant="bond" /></td>
                       <td>{{ order.createdAt | date }}</td>
-                      <td>—</td>
+                      <td>
+                        @if (order.status === 'Open' || order.status === 'PartiallyFilled') {
+                          <button
+                            class="btn btn-sm btn-outline"
+                            [disabled]="actionPending()"
+                            (click)="onCancel(order)"
+                          >
+                            {{ cancellingOrderId() === order.id ? 'Cancelling…' : 'Cancel' }}
+                          </button>
+                        } @else {
+                          —
+                        }
+                      </td>
                     </tr>
                   }
                 </tbody>
@@ -224,7 +251,7 @@ import { Order, Bond, QuoteAsset } from '../../shared/interfaces/bond.interface'
   `],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class MarketplaceListComponent implements OnInit {
+export class MarketplaceListComponent implements OnInit, OnDestroy {
   private readonly apiService = inject(ApiService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
@@ -243,6 +270,21 @@ export class MarketplaceListComponent implements OnInit {
   buyAmount = 0;
   buyMaxPrice = 0;
 
+  readonly cancellingOrderId = signal<number | null>(null);
+  readonly cancelError = signal('');
+
+  /**
+   * Reconciliation (#91): a single wallet address shares one sequential
+   * nonce per contract (see `NonceService.next`), so a buy and a cancel from
+   * the same connected wallet cannot safely be submitted concurrently.
+   * `actionPending` gates every action button (Confirm, Cancel) so at most
+   * one nonce-consuming marketplace action is in flight at a time.
+   */
+  readonly actionPending = computed(() => this.buySubmitting() || this.cancellingOrderId() !== null);
+
+  private readonly ordersRefresh$ = new Subject<{ forceRefresh: boolean; background: boolean }>();
+  private readonly destroy$ = new Subject<void>();
+
   readonly balances = signal<QuoteBalances>({ USDC: 0, XLM: 0 });
   readonly balancesLoaded = signal(false);
   quotePanel?: QuoteBalanceComponent;
@@ -257,7 +299,7 @@ export class MarketplaceListComponent implements OnInit {
     });
     const result: Record<number, { best: number; average: number }> = {};
     grouped.forEach((list, bondId) => {
-      const prices = list.map(o => o.pricePerToken);
+      const prices = list.map(o => Number(o.pricePerToken));
       result[bondId] = {
         best: Math.min(...prices),
         average: prices.reduce((a, b) => a + b, 0) / prices.length,
@@ -284,8 +326,32 @@ export class MarketplaceListComponent implements OnInit {
     if (bondIdParam) {
       this.filterBondId.set(Number(bondIdParam));
     }
+    this.ordersRefresh$
+      .pipe(
+        takeUntil(this.destroy$),
+        switchMap((opts) => this.fetchOrders(opts.forceRefresh, opts.background)),
+      )
+      .subscribe();
     this.loadBonds();
     this.loadOrders();
+
+    // Reconciliation (#91): periodic background refresh so a stale open
+    // order (filled/cancelled/expired elsewhere) is caught without the user
+    // having to click Refresh. Funnelled through the same ordersRefresh$
+    // pipeline as manual refreshes, so switchMap still guarantees only one
+    // in-flight request at a time.
+    timer(ORDERS_POLL_INTERVAL_MS, ORDERS_POLL_INTERVAL_MS)
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(() => this.loadOrders(false, true));
+  }
+
+  ngOnDestroy(): void {
+    this.destroy$.next();
+    this.destroy$.complete();
+  }
+
+  refreshOrders(): void {
+    this.loadOrders(true);
   }
 
   private loadBonds(): void {
@@ -294,19 +360,42 @@ export class MarketplaceListComponent implements OnInit {
     });
   }
 
-  private loadOrders(): void {
-    this.loading.set(true);
+  private loadOrders(forceRefresh = false, background = false): void {
+    this.ordersRefresh$.next({ forceRefresh, background });
+  }
+
+  private fetchOrders(forceRefresh: boolean, background = false): Observable<PaginatedResponse<Order>> {
+    // Background polling ticks (#91) skip the loading spinner so the list
+    // doesn't flicker every poll interval; manual refreshes and the initial
+    // load still show it.
+    if (!background) this.loading.set(true);
     this.error.set('');
-    this.apiService.getOrders(this.filterBondId() ?? undefined).subscribe({
-      next: (res) => {
-        this.orders.set(res.data);
-        this.loading.set(false);
-      },
-      error: () => {
-        this.error.set('Failed to load orders');
-        this.loading.set(false);
-      },
-    });
+    // defer re-invokes the API call on every (re)subscription, so retries issue a
+    // fresh request with a fresh cache-busting param instead of reusing a stale one.
+    return defer(() => this.apiService.getOrders({ bondId: this.filterBondId() ?? undefined }, forceRefresh)).pipe(
+      retry({
+        count: ORDERS_RETRY_COUNT,
+        delay: (error, attempt) =>
+          this.isTransientError(error) ? timer(this.retryDelayMs(attempt)) : throwError(() => error),
+      }),
+      tap({
+        next: (res) => this.orders.set(res.data),
+        error: () => this.error.set('Failed to load orders'),
+      }),
+      finalize(() => this.loading.set(false)),
+      catchError(() => EMPTY),
+    );
+  }
+
+  private retryDelayMs(attempt: number): number {
+    return Math.min(ORDERS_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), ORDERS_RETRY_MAX_DELAY_MS);
+  }
+
+  private isTransientError(error: unknown): boolean {
+    if (error instanceof HttpErrorResponse) {
+      return error.status === 0 || error.status >= 500;
+    }
+    return true;
   }
 
   onFilterChange(bondId: number | null): void {
@@ -347,7 +436,7 @@ export class MarketplaceListComponent implements OnInit {
     if (!this.buyAmount || this.buyAmount < 1 || !this.buyMaxPrice || this.buyMaxPrice <= 0) return null;
 
     const asset = order.quoteAsset;
-    const required = this.buyAmount * order.pricePerToken;
+    const required = this.buyAmount * Number(order.pricePerToken);
     const available = this.balances()[asset] ?? 0;
     return {
       required,
@@ -368,6 +457,7 @@ export class MarketplaceListComponent implements OnInit {
   }
 
   onBuy(order: Order): void {
+    if (this.actionPending()) return;
     if (!this.buyAmount || this.buyAmount < 1 || !this.buyMaxPrice || this.buyMaxPrice <= 0) return;
     this.buySubmitting.set(true);
     this.buyError.set('');
@@ -381,11 +471,42 @@ export class MarketplaceListComponent implements OnInit {
         this.buyOrderId.set(null);
         this.buySubmitting.set(false);
         this.quotePanel?.loadBalances();
-        this.loadOrders();
+        this.loadOrders(true);
       },
       error: (err) => {
-        this.buyError.set(err.error?.detail || err.message || 'Buy failed');
+        // Reconciliation (#91): the backend now revalidates the order
+        // immediately before buying and rejects a no-longer-open order with
+        // 409 Conflict. Always refresh so the row's true status replaces
+        // whatever was shown when the user opened this form, and close the
+        // form for a 409 specifically since that order is confirmed dead --
+        // for other errors (e.g. insufficient funds) leave it open so the
+        // user can act (e.g. deposit more) without losing their inputs.
+        this.buyError.set(appErrorMessage(err, 'Buy failed'));
         this.buySubmitting.set(false);
+        if (normalizeApiError(err).status === 409) {
+          this.buyOrderId.set(null);
+        }
+        this.loadOrders(true);
+      },
+    });
+  }
+
+  onCancel(order: Order): void {
+    if (this.actionPending()) return;
+    this.cancellingOrderId.set(order.id);
+    this.cancelError.set('');
+
+    this.apiService.cancelOrder(order.id).subscribe({
+      next: () => {
+        this.cancellingOrderId.set(null);
+        this.loadOrders(true);
+      },
+      error: (err) => {
+        // A cancel rejection (e.g. the order was just filled) is itself a
+        // stale-state signal, so always refresh (#91) to show the real status.
+        this.cancelError.set(appErrorMessage(err, 'Cancel failed'));
+        this.cancellingOrderId.set(null);
+        this.loadOrders(true);
       },
     });
   }

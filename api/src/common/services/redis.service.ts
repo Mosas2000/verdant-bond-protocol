@@ -69,6 +69,51 @@ export class RedisService {
     }
   }
 
+  /**
+   * Atomically get the value of `key` and delete it in a single Redis operation.
+   *
+   * This is the safe primitive for one-time-use tokens (e.g. auth challenges):
+   * if a value is returned, the caller knows they are the exclusive consumer
+   * and no concurrent request could have read the same value.
+   *
+   * Returns the previous value stored at `key`, or `null` if the key did not
+   * exist (already consumed / expired / never set).
+   *
+   * Throws ServiceUnavailableException on Redis failure so callers do not
+   * silently fall back to non-atomic behaviour.
+   */
+  async getDel(key: string): Promise<string | null> {
+    try {
+      return await this.redis.getDel(key);
+    } catch (error) {
+      this.healthy = false;
+      this.logger.error(`Redis getDel failed for ${key}: ${this.message(error)}`);
+      throw new ServiceUnavailableException('Challenge consumption is unavailable');
+    }
+  }
+
+  /**
+   * Delete all keys matching a glob pattern.
+   *
+   * Uses SCAN with MATCH to enumerate matching keys without blocking Redis,
+   * then DELs them in a single batched call per cursor page.
+   * Never calls KEYS, which blocks the server on large keyspaces.
+   */
+  async delPattern(pattern: string): Promise<void> {
+    try {
+      let cursor = 0;
+      do {
+        const reply = await this.redis.scan(cursor, { MATCH: pattern, COUNT: 100 });
+        cursor = reply.cursor;
+        if (reply.keys.length > 0) {
+          await this.redis.del(reply.keys);
+        }
+      } while (cursor !== 0);
+    } catch (error) {
+      this.logDegraded('delPattern', pattern, error);
+    }
+  }
+
   async sAdd(key: string, value: string): Promise<void> {
     try {
       await this.redis.sAdd(key, value);
@@ -93,6 +138,24 @@ export class RedisService {
       this.healthy = false;
       this.logger.error(`Redis incr failed for ${key}: ${this.message(error)}`);
       throw new ServiceUnavailableException('Nonce tracking is unavailable');
+    }
+  }
+
+  async expire(key: string, seconds: number): Promise<boolean> {
+    try {
+      return await this.redis.expire(key, seconds);
+    } catch (error) {
+      this.logDegraded('expire', key, error);
+      return false;
+    }
+  }
+
+  async ttl(key: string): Promise<number> {
+    try {
+      return await this.redis.ttl(key);
+    } catch (error) {
+      this.logDegraded('ttl', key, error);
+      return -1;
     }
   }
 

@@ -1,6 +1,5 @@
 import {
-  Controller, Get, Post, Body, Param, Query,
-  HttpCode, HttpStatus, UseGuards, ParseIntPipe,
+  Controller, Get, Post, Body, Param, Query, Req, HttpCode, HttpStatus, UseGuards, ParseIntPipe
 } from '@nestjs/common';
 import { BondsService } from './bonds.service';
 import { CreateBondDto } from './dto/create-bond.dto';
@@ -11,10 +10,12 @@ import { TransferBondDto } from './dto/transfer-bond.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { AdminGuard } from '../common/guards/admin.guard';
+import { KycGuard } from '../common/guards/kyc.guard';
 import {
   BondResponse,
   SubscriptionResponse,
   HolderListResponse,
+  HeldBondResponse,
   CouponDistributionResponse,
   ClaimCreditsResponse,
   TransferResponse,
@@ -27,6 +28,7 @@ export class BondsController {
   constructor(private readonly bondsService: BondsService) {}
 
   @Post()
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() dto: CreateBondDto): Promise<BondResponse> {
     return this.bondsService.create(dto);
@@ -37,12 +39,20 @@ export class BondsController {
     return this.bondsService.findAll(query.page, query.limit);
   }
 
+  @Get('held/:address')
+  async findHeldByAddress(
+    @Param('address') address: string,
+  ): Promise<HeldBondResponse[]> {
+    return this.bondsService.findHeldByAddress(address);
+  }
+
   @Get(':id')
   async findOne(@Param('id', ParseIntPipe) id: number): Promise<BondResponse> {
     return this.bondsService.findOne(id);
   }
 
   @Post(':id/subscribe')
+  @UseGuards(JwtAuthGuard, KycGuard)
   @HttpCode(HttpStatus.OK)
   async subscribe(
     @Param('id', ParseIntPipe) id: number,
@@ -59,6 +69,7 @@ export class BondsController {
   }
 
   @Post(':id/coupon')
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @HttpCode(HttpStatus.OK)
   async distributeCoupon(
     @Param('id', ParseIntPipe) id: number,
@@ -68,6 +79,7 @@ export class BondsController {
   }
 
   @Post(':id/claim')
+  @UseGuards(JwtAuthGuard, KycGuard)
   @HttpCode(HttpStatus.OK)
   async claimCredits(
     @Param('id', ParseIntPipe) id: number,
@@ -85,6 +97,7 @@ export class BondsController {
 
   @Post(':id/sweep-undistributed')
   @UseGuards(JwtAuthGuard, AdminGuard)
+  @RateLimit({ type: 'mutation' })
   @HttpCode(HttpStatus.OK)
   async sweepUndistributed(
     @Param('id', ParseIntPipe) id: number,
@@ -93,6 +106,7 @@ export class BondsController {
   }
 
   @Post(':id/transfer')
+  @UseGuards(JwtAuthGuard, KycGuard)
   @HttpCode(HttpStatus.OK)
   async transfer(
     @Param('id', ParseIntPipe) id: number,
@@ -102,10 +116,21 @@ export class BondsController {
   }
 
   @Post(':id/mature')
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @HttpCode(HttpStatus.OK)
   async mature(
     @Param('id', ParseIntPipe) id: number,
   ): Promise<BondResponse> {
     return this.bondsService.mature(id);
+  }
+
+  @Get(':id/export')
+  @UseGuards(JwtAuthGuard)
+  async exportBond(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: any,
+  ): Promise<any> {
+    const auditorAddress = req.user?.walletAddress || '';
+    return this.bondsService.exportBond(id, auditorAddress);
   }
 }
