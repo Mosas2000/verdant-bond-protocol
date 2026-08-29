@@ -158,6 +158,10 @@ export class ApiService {
     return this.withProblemDetails(this.http.post<void>('/api/marketplace/buy', data, { headers: this.headers() }));
   }
 
+  cancelOrder(orderId: number): Observable<void> {
+    return this.http.delete<void>(`/api/marketplace/orders/${orderId}`, { headers: this.headers() });
+  }
+
   getQuoteBalance(asset: QuoteAsset = 'USDC'): Observable<QuoteBalanceResponse> {
     return this.withProblemDetails(this.http.get<QuoteBalanceResponse>('/api/marketplace/quote-balance', {
       params: { asset },

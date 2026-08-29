@@ -167,7 +167,11 @@ export class MarketplaceSellComponent implements OnInit {
   }
 
   onSubmit(): void {
-    if (this.form.invalid) return;
+    // Guards against a duplicate listing being submitted while one is
+    // already in flight (#91): the submit button's [disabled] binding covers
+    // a click, but a native form submit (e.g. pressing Enter) fires
+    // (ngSubmit) regardless of a button's disabled attribute.
+    if (this.form.invalid || this.submitting()) return;
     this.submitting.set(true);
     this.error.set('');
 
