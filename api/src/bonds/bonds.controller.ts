@@ -1,6 +1,5 @@
 import {
-  Controller, Get, Post, Body, Param, Query,
-  HttpCode, HttpStatus, UseGuards, ParseIntPipe,
+  Controller, Get, Post, Body, Param, Query, Req, HttpCode, HttpStatus, UseGuards, ParseIntPipe
 } from '@nestjs/common';
 import { BondsService } from './bonds.service';
 import { CreateBondDto } from './dto/create-bond.dto';
@@ -98,6 +97,7 @@ export class BondsController {
 
   @Post(':id/sweep-undistributed')
   @UseGuards(JwtAuthGuard, AdminGuard)
+  @RateLimit({ type: 'mutation' })
   @HttpCode(HttpStatus.OK)
   async sweepUndistributed(
     @Param('id', ParseIntPipe) id: number,
@@ -122,5 +122,15 @@ export class BondsController {
     @Param('id', ParseIntPipe) id: number,
   ): Promise<BondResponse> {
     return this.bondsService.mature(id);
+  }
+
+  @Get(':id/export')
+  @UseGuards(JwtAuthGuard)
+  async exportBond(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: any,
+  ): Promise<any> {
+    const auditorAddress = req.user?.walletAddress || '';
+    return this.bondsService.exportBond(id, auditorAddress);
   }
 }

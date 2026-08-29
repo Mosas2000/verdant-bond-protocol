@@ -1,5 +1,6 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { ContractService } from '../stellar/contract.service';
+import { ContractException } from '../stellar/contract-errors';
 import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
 import { RedisService } from '../common/services/redis.service';
@@ -9,6 +10,8 @@ import { SubscribeDto } from './dto/subscribe.dto';
 import { DistributeCouponDto } from './dto/distribute-coupon.dto';
 import { ClaimCreditsDto } from './dto/claim-credits.dto';
 import { TransferBondDto } from './dto/transfer-bond.dto';
+import { nativeToScVal, scValToNative, Address, xdr } from '@stellar/stellar-sdk';
+import * as crypto from 'crypto';
 import {
   BondResponse,
   HeldBondResponse,
@@ -25,6 +28,7 @@ import {
 } from './interfaces/bond.interface';
 import { toBigIntString } from '../common/utils';
 import { ConfigService } from '../config/config.service';
+import { Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 
 const BOND_ERROR_CODE = {
   NotInitialized: 1,
@@ -358,25 +362,157 @@ export class BondsService {
     };
   }
 
-  private mapBondError(error: unknown, bondId: number): Error {
-    if (error instanceof BadRequestException) {
-      const message = error.message;
-      const match = message.match(/error code (\d+)/);
-      const code = match ? Number(match[1]) : undefined;
-
-      if (code === BOND_ERROR_CODE.Overflow) {
-        return new BadRequestException(
-          `Bond #${bondId} cannot be matured before its maturity date. ` +
-          'Maturation is only allowed once the maturity date has been reached.',
-        );
+  private mapBondError(error: unknown, bondId: number): any {
+    if (error instanceof ContractException) {
+      const code = error.rawErrorCode as number | undefined;
+      if (code === BOND_ERROR_CODE.BondAlreadyMatured) {
+        return new BadRequestException(`Bond ${bondId} is already matured`);
       }
+      if (code === BOND_ERROR_CODE.BondNotFound) {
+        return new BadRequestException(`Bond ${bondId} not found`);
+      }
+      return new BadRequestException(error.detail || String(error.message));
+    }
 
+    if (error instanceof Error) {
       return error;
     }
-    if (error instanceof Error) {
-      return new BadRequestException(error.message);
-    }
+
     return new BadRequestException('Failed to mature bond');
+  }
+
+  async exportBond(bondId: number, auditorAddress: string): Promise<any> {
+    // 1. Fetch bond config & state
+    const configScVal = await this.contractService.simulateCall({
+      contractAddress: this.configService.getBondIssuerAddress(),
+      method: 'get_bond',
+      args: [nativeToScVal(BigInt(bondId), { type: 'u64' })],
+    });
+    const config = scValToNative(configScVal) as any[];
+    if (!config || config.length === 0) {
+      throw new BadRequestException('Bond not found');
+    }
+
+    const stateScVal = await this.contractService.simulateCall({
+      contractAddress: this.configService.getBondIssuerAddress(),
+      method: 'get_bond_state',
+      args: [nativeToScVal(BigInt(bondId), { type: 'u64' })],
+    });
+    const state = scValToNative(stateScVal) as any[];
+
+    const bondData = {
+      id: bondId,
+      projectRegistryId: Buffer.from(config[0] as Uint8Array).toString('hex'),
+      faceValue: toBigIntString(config[1]),
+      couponSchedule: (config[2] as any[]).map((t) => Number(t)),
+      creditType: config[3],
+      maturityDate: Number(config[4]),
+      totalSupply: toBigIntString(config[5]),
+      totalSubscribed: toBigIntString(state[0]),
+      status: state[1],
+      createdAt: new Date(Number(state[2]) * 1000).toISOString(),
+    };
+
+    // 2. Lifecycle events
+    const lifecycleEvents: any[] = [
+      {
+        event: 'ISSUED',
+        timestamp: bondData.createdAt,
+        details: { totalSupply: bondData.totalSupply },
+      },
+    ];
+    if (Number(state[1]) === 1) { // Matured
+      lifecycleEvents.push({
+        event: 'MATURED',
+        timestamp: new Date(Number(config[4]) * 1000).toISOString(),
+        details: {},
+      });
+    }
+
+    // 3. Holders list
+    const holdersResponse = await this.getHolders(bondId);
+    const holders = holdersResponse.holders || [];
+
+    // 4. Coupon distributions
+    const couponDistributions: any[] = [];
+    const scheduleLength = bondData.couponSchedule.length;
+    for (let period = 0; period < scheduleLength; period++) {
+      try {
+        const periodInfoScVal = await this.contractService.simulateCall({
+          contractAddress: this.configService.getCouponEngineAddress(),
+          method: 'get_period_info',
+          args: [
+            nativeToScVal(BigInt(bondId), { type: 'u64' }),
+            nativeToScVal(period, { type: 'u32' }),
+          ],
+        });
+        const periodInfo = scValToNative(periodInfoScVal) as any[];
+        if (periodInfo && periodInfo[4]) { // distributed is true
+          couponDistributions.push({
+            periodIndex: Number(periodInfo[0]),
+            startTime: Number(periodInfo[1]),
+            endTime: Number(periodInfo[2]),
+            totalCreditsEarned: toBigIntString(periodInfo[3]),
+            reportId: Number(periodInfo[5]),
+            undistributed: toBigIntString(periodInfo[6]),
+          });
+        }
+      } catch {}
+    }
+
+    // 5. Credit retirements
+    const retirements: any[] = [];
+    try {
+      const countScVal = await this.contractService.simulateCall({
+        contractAddress: this.configService.getCreditRetirementAddress(),
+        method: 'total_retirements',
+        args: [],
+      });
+      const totalRetirements = Number(scValToNative(countScVal));
+      for (let retId = 1; retId <= totalRetirements; retId++) {
+        try {
+          const recScVal = await this.contractService.simulateCall({
+            contractAddress: this.configService.getCreditRetirementAddress(),
+            method: 'get_retirement_record',
+            args: [nativeToScVal(BigInt(retId), { type: 'u64' })],
+          });
+          const record = scValToNative(recScVal) as any[];
+          if (Number(record[2]) === bondId) {
+            retirements.push({
+              id: Number(record[0]),
+              holder: (record[1] as any).toString?.() || '',
+              amount: toBigIntString(record[3]),
+              creditType: record[4],
+              retiredAt: Number(record[5]),
+              certificateIpfsHash: Buffer.from(record[6] as Uint8Array).toString('hex'),
+            });
+          }
+        } catch {}
+      }
+    } catch {}
+
+    // 6. Construct payload & checksum
+    const payload: any = {
+      generationMetadata: {
+        timestamp: new Date().toISOString(),
+        exporterAddress: auditorAddress || 'system',
+        version: '1.0.0',
+      },
+      bond: bondData,
+      lifecycleEvents,
+      holders,
+      couponDistributions,
+      retirements,
+    };
+
+    // Calculate sha256 checksum over sorted payload fields
+    const sortedData = JSON.stringify(payload, Object.keys(payload).sort());
+    payload.generationMetadata.checksum = crypto
+      .createHash('sha256')
+      .update(sortedData)
+      .digest('hex');
+
+    return payload;
   }
 
   private getAdminSecret(): string {

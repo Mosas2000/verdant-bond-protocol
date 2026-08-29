@@ -1,10 +1,13 @@
 import {
   Injectable,
   BadRequestException,
+  ConflictException,
+  NotFoundException,
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
 import { ContractService } from '../stellar/contract.service';
+import { ContractException } from '../stellar/contract-errors';
 import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
 import { RedisService } from '../common/services/redis.service';
@@ -109,8 +112,17 @@ export class DexService {
     return this.getOrder(orderId);
   }
 
+  /**
+   * Reconciliation (#91): the order is re-fetched directly from the ledger
+   * (bypassing the read cache in `getOrder`) immediately before computing
+   * proceeds, so a buy is evaluated against the order's true current state
+   * rather than a copy that may be up to 60s stale. `assertOrderIsActionable`
+   * then rejects a no-longer-open order with a clear, typed error before any
+   * contract call is attempted.
+   */
   async buyBondTokens(dto: BuyBondDto, buyerAddress: string): Promise<OrderResponse> {
-    const order = await this.getOrder(dto.orderId);
+    const order = await this.fetchOrderFromLedger(dto.orderId);
+    this.assertOrderIsActionable(order);
     const proceeds = BigInt(order.pricePerToken) * BigInt(dto.amount);
 
     const escrowed = await this.getQuoteBalance(buyerAddress, order.quoteAsset);
@@ -144,18 +156,33 @@ export class DexService {
     return this.getOrder(dto.orderId);
   }
 
+  /**
+   * Reconciliation (#91): same fresh-fetch-then-assert guard as
+   * `buyBondTokens`, applied before `cancel_listing`. The contract invocation
+   * is now also wrapped in `mapDexError` (previously unmapped), so a
+   * contract-level rejection in the narrow race window between this check
+   * and the on-chain call (e.g. the order was just filled) still surfaces as
+   * a clean, typed error instead of a raw, unmapped exception.
+   */
   async cancelOrder(orderId: number, callerAddress: string): Promise<void> {
+    const order = await this.fetchOrderFromLedger(orderId);
+    this.assertOrderIsActionable(order);
+
     const adminSecret = this.getAdminSecret();
     const nonce = await this.nonceService.next(this.configService.getDexRouterAddress(), callerAddress);
 
-    await this.contractService.invokeContractMethod(
-      this.configService.getDexRouterAddress(), 'cancel_listing', adminSecret,
-      [
-        Address.fromString(callerAddress).toScVal(),
-        nativeToScVal(BigInt(orderId), { type: 'u64' }),
-      ],
-      nonce,
-    );
+    try {
+      await this.contractService.invokeContractMethod(
+        this.configService.getDexRouterAddress(), 'cancel_listing', adminSecret,
+        [
+          Address.fromString(callerAddress).toScVal(),
+          nativeToScVal(BigInt(orderId), { type: 'u64' }),
+        ],
+        nonce,
+      );
+    } catch (error) {
+      throw this.mapDexError(error);
+    }
 
     await this.redis.delPattern(`orders:*`);
     await this.redis.del(`order:${orderId}`);
@@ -166,15 +193,32 @@ export class DexService {
     const cached = await this.redis.get(cacheKey);
     if (cached) return JSON.parse(cached);
 
+    const order = await this.fetchOrderFromLedger(orderId);
+
+    await this.redis.setEx(cacheKey, 60, JSON.stringify(order));
+    return order;
+  }
+
+  /** Reads the order directly from the ledger, bypassing the Redis cache entirely. */
+  private async fetchOrderFromLedger(orderId: number): Promise<OrderResponse> {
     const orderScVal = await this.contractService.simulateCall({
       contractAddress: this.configService.getDexRouterAddress(),
       method: 'get_order',
       args: [nativeToScVal(BigInt(orderId), { type: 'u64' })],
     });
-    const order = this.decodeOrder(scValToNative(orderScVal) as any[]);
+    return this.decodeOrder(scValToNative(orderScVal) as any[]);
+  }
 
-    await this.redis.setEx(cacheKey, 60, JSON.stringify(order));
-    return order;
+  /**
+   * Rejects an order that is not currently open for buy/cancel, with a clear
+   * message identifying its actual state (#91).
+   */
+  private assertOrderIsActionable(order: OrderResponse): void {
+    if (order.status !== OrderStatus.Open && order.status !== OrderStatus.PartiallyFilled) {
+      throw new ConflictException(
+        `Order ${order.id} is no longer available (status: ${order.status}). Refresh to see the latest order list.`,
+      );
+    }
   }
 
   async getQuoteBalance(
@@ -239,6 +283,8 @@ export class DexService {
   }
 
   private decodeOrder(data: any[]): OrderResponse {
+    const rawStatus = this.orderStatusFromIndex(Number(data[6]));
+    const expiresAtSeconds = Number(data[8]);
     return {
       id: Number(data[0]),
       seller: data[1] as string,
@@ -246,7 +292,7 @@ export class DexService {
       amount: toBigIntString(data[3]),
       pricePerToken: toBigIntString(data[4]),
       quoteAsset: data[5] as QuoteAsset,
-      status: this.orderStatusFromIndex(Number(data[6])),
+      status: this.deriveEffectiveStatus(rawStatus, expiresAtSeconds),
       createdAt: new Date(Number(data[7]) * 1000).toISOString(),
     };
   }
@@ -261,6 +307,24 @@ export class DexService {
         OrderStatus.Expired,
       ][index] ?? OrderStatus.Open
     );
+  }
+
+  /**
+   * Reconciliation (#91): the contract's own persisted `status` only becomes
+   * `Expired` once the batched `clean_expired_orders` admin sweep (hourly,
+   * see `dex.scheduler.ts`) has visited that order id -- it does not update
+   * lazily on read. `expires_at` (a ledger-timestamp, i.e. Unix epoch
+   * seconds -- see Stellar's Soroban `Env::ledger().timestamp()` docs) is
+   * always current on every read, so deriving the effective status from it
+   * here means every API response reflects true expiry immediately, instead
+   * of for up to an hour after the deadline passes. Mirrors the contract's
+   * own `is_order_expired` check (`ledger_timestamp >= expires_at`) against
+   * server wall-clock time. O(1).
+   */
+  private deriveEffectiveStatus(rawStatus: OrderStatus, expiresAtSeconds: number): OrderStatus {
+    const isOpenState = rawStatus === OrderStatus.Open || rawStatus === OrderStatus.PartiallyFilled;
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    return isOpenState && nowSeconds >= expiresAtSeconds ? OrderStatus.Expired : rawStatus;
   }
 
   private getAdminSecret(): string {
@@ -330,6 +394,21 @@ export class DexService {
   }
 
   private mapDexError(error: unknown): Error {
+    if (error instanceof HttpException) {
+      return error;
+    }
+
+    if (error instanceof ContractException) {
+      const code = error.rawErrorCode as number | undefined;
+      if (code === DEX_ERROR_CODE.InsufficientFunds) {
+        return new HttpException(
+          'Insufficient escrowed funds. Call POST /marketplace/escrow/deposit before purchasing.',
+          HttpStatus.PAYMENT_REQUIRED,
+        );
+      }
+      return new BadRequestException(error.detail || String(error.message));
+    }
+
     const message = error instanceof Error ? error.message : String(error);
     const match = message.match(/#(\d+)/) ?? message.match(/Error\(-(\d+)/);
     const code = match ? Number(match[1]) : undefined;
@@ -339,6 +418,20 @@ export class DexService {
         'Insufficient escrowed funds. Call POST /marketplace/escrow/deposit before purchasing.',
         HttpStatus.PAYMENT_REQUIRED,
       );
+    }
+
+    // Reconciliation (#91): the pre-flight fetch in buyBondTokens/cancelOrder
+    // narrows this to a rare race (the order changed state in the moment
+    // between that check and this on-chain call), but it can still happen --
+    // map it to the same clear, typed conflict rather than a raw contract error.
+    if (code === DEX_ERROR_CODE.OrderAlreadyFilled || code === DEX_ERROR_CODE.OrderExpired) {
+      return new ConflictException(
+        'Order state changed on-chain before this action completed. Refresh to see the latest order list.',
+      );
+    }
+
+    if (code === DEX_ERROR_CODE.OrderNotFound) {
+      return new NotFoundException('Order not found.');
     }
 
     if (error instanceof HttpException) {

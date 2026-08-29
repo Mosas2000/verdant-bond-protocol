@@ -11,6 +11,7 @@ import { BuyBondDto } from './dto/buy-bond.dto';
 import { DepositQuoteDto } from './dto/deposit-quote.dto';
 import { WithdrawQuoteDto } from './dto/withdraw-quote.dto';
 import { QuoteBalanceQueryDto } from './dto/quote-balance-query.dto';
+import { RateLimit } from '../common/decorators/rate-limit.decorator';
 import {
   OrderResponse,
   PriceFeedResponse,
