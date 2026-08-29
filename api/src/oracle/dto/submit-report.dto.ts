@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, IsPositive, Min, IsOptional } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsPositive, Min, IsOptional, IsObject } from 'class-validator';
 import { IsEvidenceReference } from '../../common/decorators/is-evidence-reference.decorator';
 
 export class SubmitReportDto {
@@ -31,6 +31,10 @@ export class SubmitReportDto {
   @IsOptional()
   @IsEvidenceReference()
   evidenceHash?: string;
+
+  @IsOptional()
+  @IsObject()
+  manifest?: Record<string, any>;
 
   @IsNumber()
   @IsOptional()

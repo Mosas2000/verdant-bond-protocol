@@ -21,6 +21,7 @@ import { nativeToScVal, scValToNative, Address, xdr } from '@stellar/stellar-sdk
 import { StellarService } from '../stellar/stellar.service';
 import { toBigIntString, encodeCid } from '../common/utils';
 import { ConfigService } from '../config/config.service';
+import { verifyManifest, verifyManifestMatchesReport } from '../../../oracle/manifest';
 
 
 
@@ -48,6 +49,27 @@ export class OracleService {
   ) {}
 
 async submitReport(dto: SubmitReportDto, providerAddress: string): Promise<ReportResponse> {
+    if (dto.manifest) {
+      const verification = verifyManifest(dto.manifest);
+      if (!verification.valid) {
+        throw new UnprocessableEntityException(
+          `Manifest verification failed: ${verification.error}`,
+        );
+      }
+      const matchVerification = verifyManifestMatchesReport(dto.manifest as any, {
+        project_id: dto.projectId,
+        methodology: dto.methodology,
+        period_start: dto.periodStart,
+        period_end: dto.periodEnd,
+        carbon_sequestered: dto.carbonSequestered,
+      });
+      if (!matchVerification.valid) {
+        throw new BadRequestException(
+          `Manifest values do not match report submission: ${matchVerification.error}`,
+        );
+      }
+    }
+
     const ipfsResult = await this.ipfsService.uploadJson({
       projectId: dto.projectId,
       periodStart: dto.periodStart,
