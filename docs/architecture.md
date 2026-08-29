@@ -6,7 +6,8 @@
 
 ```rust
 // Public functions
-pub fn issue_bond(...)
+pub fn issue_bond(...)                         // validates project is Approved via ProjectRegistry
+pub fn set_project_registry(caller, registry)  // admin: link ProjectRegistry for cross-contract validation
 pub fn subscribe(...)
 pub fn transfer(from, to, bond_id, amount, nonce)   // replay-protected on-chain token transfer
 pub fn fund_redemption(caller, bond_id, amount, nonce)  // admin funds principal escrow
@@ -80,10 +81,14 @@ pub fn get_orders_by_seller(...)
 ```rust
 // Public functions
 pub fn register_project(...)
-pub fn approve_project(...)
-pub fn reject_project(...)
+pub fn approve_project(...)                    // Pending -> Approved (admin)
+pub fn reject_project(...)                     // Pending -> Rejected (admin)
+pub fn deactivate_project(caller, project_id)  // Approved -> Inactive (admin, for fraud/withdrawal)
+pub fn resubmit_project(caller, project_id, updated_ipfs_hash) // Rejected -> Pending (owner, preserves id/history)
 pub fn get_project(...)
 pub fn get_all_projects(...)
+pub fn has_approved_project(key)               // view: true iff status == Approved
+pub fn project_key(project_id)                 // helper: u64 -> BytesN<32> storage key
 ```
 
 ### CreditRetirement
@@ -103,6 +108,7 @@ pub fn get_retired_balance(...)
 | BondIssuer      | HolderBalance(bond_id, holder) | i128           | Token balance                                                   |
 | BondIssuer      | BondState(bond_id)             | BondState      | Current bond state                                              |
 | BondIssuer      | RedemptionPool(bond_id)        | i128           | Escrowed face-value principal available for matured redemptions |
+| BondIssuer      | ProjectRegistry                | Address        | Optional cross-contract link enforcing Approved-only issuance   |
 | CouponEngine    | Coupon(bond_id, period)        | CouponData     | Coupon distribution                                             |
 | CouponEngine    | Accrued(bond_id, holder)       | i128           | Accrued credits                                                 |
 | CouponEngine    | UndistributedTotal(bond_id)    | i128           | Unallocated coupon dust                                         |
@@ -116,12 +122,28 @@ pub fn get_retired_balance(...)
 ## Cross-Contract Calls
 
 ```
-ProjectRegistry ──► BondIssuer (verify project exists)
+BondIssuer ──► ProjectRegistry (verify project is Approved; rejects Inactive/unregistered via has_approved_project)
+ProjectRegistry ──► BondIssuer (legacy verify path)
 BondIssuer ──► CouponEngine (distribute coupons)
 CouponEngine ──► OracleConsumer (read verified reports by report_id)
 DEXRouter ──► BondIssuer (settle purchase via transfer, debiting seller / crediting buyer)
 CreditRetirement ──► CouponEngine (verify credit ownership)
 ```
+
+## Project Lifecycle
+
+```
+Pending ──approve_project(admin)──► Approved ──deactivate_project(admin)──► Inactive (terminal)
+  │                                     │
+  └──reject_project(admin)──► Rejected ─┘
+                                │
+                                └──resubmit_project(owner, updated_ipfs_hash)──► Pending (same project_id, history preserved)
+```
+
+- `register_project` creates a `Pending` project. Only an admin may `approve_project` (→ `Approved`) or `reject_project` (→ `Rejected`) from `Pending`.
+- `deactivate_project` transitions an `Approved` project to `Inactive` (admin-only). This is the retirement path for fraudulent or withdrawn projects; `Inactive` is terminal.
+- `resubmit_project` allows the original owner to return a `Rejected` project to `Pending` with updated IPFS documentation, preserving `project_id` and on-chain history (vs. registering a new id).
+- `BondIssuer.issue_bond` cross-calls `ProjectRegistry.has_approved_project(project_id)` when a registry is linked via `set_project_registry`. Only `Approved` projects may back new bonds; `Inactive`, `Rejected`, `Pending`, and unregistered projects are rejected with `BondError::ProjectNotApproved`.
 
 ## Oracle Report Status Machine
 
@@ -190,6 +212,77 @@ Reports follow a strict status lifecycle managed by `OracleConsumer`:
 - Integer-division remainder that cannot be allocated to holders is recorded as `undistributed` per period and aggregated in `UndistributedTotal`; the admin can recover it via `sweep_undistributed`, preventing value from being silently lost.
 
 ## API Layer
+
+### KYC State Model (Durable Compliance Store)
+
+KYC state used to live **only** in Redis under `kyc:<address>` — volatile, unauditable,
+and indistinguishable from cache. It is now a three-layer model:
+
+| Layer | Store | Role | Notes |
+| ----- | ----- | ---- | ----- |
+| 1 (Source of Truth) | `KycStoreService` — durable JSON snapshot + append-only JSONL audit log in `data/kyc/` (configurable via `KYC_STORE_DIR`) | Every status change is a persisted `KycAuditEntry` with from/to status, actor, reason, providerReference, and expiresAt. | Snapshot is atomic (`rename` from `.tmp.<pid>`); audit is `fs.appendFile` so a snapshot loss can be replayed. |
+| 2 (Write-through cache) | Redis `kyc:<address>` → JSON-encoded `KycRecord` with 60s TTL | Eliminates durable reads on every guard check. | Invalidated + re-written on every transition. Malformed cache rows fall back to durable store. |
+| 3 (Access / Guard) | `KycGuard` + `AuthService.getProfile` | Always goes through `KycService`, never talks to Redis directly. | |
+
+**KycRecord shape (durable + cache):**
+```ts
+{
+  address,
+  status: NONE | PENDING | VERIFIED | ACCREDITED | EXPIRED | REJECTED,
+  source: 'provider' | 'admin' | 'system' | 'import',
+  actor,               // admin/provider identity that performed the change
+  reason,              // human-readable justification
+  providerReference,   // opaque ID from the external KYC vendor (audit linkage)
+  createdAt, updatedAt, expiresAt
+}
+```
+
+**KycAuditEntry shape (append-only log):**
+```ts
+{ id, address, fromStatus, toStatus, source, actor, reason, providerReference, expiresAt, timestamp }
+```
+
+**Status lifecycle / downgrade semantics:**
+
+```
+   NONE → PENDING ──► VERIFIED ──► ACCREDITED
+                     │    │            │
+                     │    │            │  expiresAt <= now
+                     │    ▼            ▼
+                     │  EXPIRED ◄──────┘   (automatic on lookup + logged as system transition)
+                     │
+                     ▼
+                  REJECTED   (admin with mandatory reason)
+```
+
+- An expired `VERIFIED` / `ACCREDITED` record becomes effective `EXPIRED` on read.
+  The next full-read (`getFullStatus`) writes a durable `EXPIRED` transition for audit
+  so the downgrade is visible without inferring it from timestamp math.
+- `REJECTED` is a terminal state that requires a mandatory `reason`.
+- The KYC guard throws differentiated 403 messages: `KYC verification has expired`,
+  `KYC verification was rejected`, or the generic `KYC verification required`.
+
+**Admin API endpoints** (all behind `JwtAuthGuard`; real deployments should gate with an admin role):
+
+| Method | Endpoint             | Description |
+| ------ | -------------------- | ----------- |
+| GET    | /auth/profile        | Own profile enriched with KYC record + last 50 audit entries |
+| GET    | /auth/kyc/:address   | Read another user's KYC record + 100-entry audit tail |
+| POST   | /auth/kyc/:address   | Admin status transition: `{ status, source?, actor?, reason?, providerReference?, expiresAt? }` → returns `{ record, entry, isNew }` |
+
+**Operational notes:**
+- Set `KYC_STORE_DIR` to a persistent volume mount in production. An ephemeral container
+  filesystem is still better than Redis-only (you can backup the JSONL log), but the
+  intended production setup is bind-mounted storage or a switch of `KycStoreService` to
+  the same Postgres used for `DATABASE_URL`.
+- Redis is **cache only**. `FLUSHALL` does not lose compliance state. You can rebuild
+  every `kyc:<address>` cache entry by iterating `KycStoreService.list()` and writing
+  through.
+- Audit log is the compliance trail. Never truncate `kyc-audit.log.jsonl`. It is replayed
+  on startup after loading `kyc-records.json`, so the snapshot is only a performance
+  optimisation — the log is ground truth.
+
+### Method Table
 
 | Method | Endpoint                       | Description                                         |
 | ------ | ------------------------------ | --------------------------------------------------- |

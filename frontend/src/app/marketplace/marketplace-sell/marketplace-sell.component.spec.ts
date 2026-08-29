@@ -14,10 +14,20 @@ describe('MarketplaceSellComponent', () => {
   beforeEach(async () => {
     apiService = {
       getHeldBonds: jasmine.createSpy('getHeldBonds').and.returnValue(of([
-        { id: 1, creditType: 'Carbon', balance: 25 },
-        { id: 2, creditType: 'BlueCarbon', balance: 10 },
+        { id: 1, creditType: 'Carbon', balance: '25' },
+        { id: 2, creditType: 'BlueCarbon', balance: '10' },
       ])),
       listBondTokens: jasmine.createSpy('listBondTokens').and.returnValue(of({ id: 1 })),
+      getQuoteBalance: jasmine
+        .createSpy('getQuoteBalance')
+        .and.callFake((asset: string) =>
+          of({ address: 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF', asset, balance: '50' }),
+        ),
+      getWalletBalance: jasmine
+        .createSpy('getWalletBalance')
+        .and.callFake((asset: string) =>
+          of({ address: 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF', asset, balance: '50' }),
+        ),
     };
 
     await TestBed.configureTestingModule({

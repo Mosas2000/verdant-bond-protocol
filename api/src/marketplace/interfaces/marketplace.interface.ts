@@ -1,3 +1,5 @@
+import { QuoteAssetSymbol } from '../quote-assets';
+
 export enum OrderStatus {
   Open = 'Open',
   PartiallyFilled = 'PartiallyFilled',
@@ -6,7 +8,12 @@ export enum OrderStatus {
   Expired = 'Expired',
 }
 
-export type QuoteAsset = 'USDC' | 'XLM';
+/**
+ * Kept as an alias of the canonical registry's symbol type (see
+ * ../quote-assets.ts) rather than its own literal union, so this and the
+ * DTOs can never drift out of sync (issue #92).
+ */
+export type QuoteAsset = QuoteAssetSymbol;
 
 export interface OrderResponse {
   id: number;

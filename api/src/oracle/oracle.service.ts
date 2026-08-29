@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, UnprocessableEntityException } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { ContractService } from '../stellar/contract.service';
 import { IpfsService } from '../projects/ipfs.service';
@@ -19,13 +19,24 @@ import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { nativeToScVal, scValToNative, Address, xdr } from '@stellar/stellar-sdk';
 import { StellarService } from '../stellar/stellar.service';
-import { toBigIntString } from '../common/utils';
+import { toBigIntString, encodeCid } from '../common/utils';
 import { ConfigService } from '../config/config.service';
 
 
 
 @Injectable()
 export class OracleService {
+  /**
+   * Methodologies backed by a registered OracleProviderAdapter (see
+   * ./providers/*). Kept in sync manually since the adapters are wired up
+   * as separate Nest providers rather than a discoverable registry.
+   */
+  private static readonly SUPPORTED_METHODOLOGIES = [
+    'VERRA-VCS',
+    'BLUE-CARBON',
+    'REMOTE-SENSING',
+  ];
+
   constructor(
     private readonly contractService: ContractService,
     private readonly ipfsService: IpfsService,
@@ -48,11 +59,23 @@ async submitReport(dto: SubmitReportDto, providerAddress: string): Promise<Repor
       timestamp: new Date().toISOString(),
     });
 
+    // Evidence hash resolution (#93): `evidenceHash`, when supplied, is
+    // already format-validated by `SubmitReportDto`'s `@IsEvidenceReference`
+    // decorator (rejected before this method -- and therefore before the
+    // IPFS upload above or any contract call -- ever runs), and becomes the
+    // on-chain evidence anchor. Otherwise, fall back to the hash of the
+    // report metadata this call just pinned, exactly as before.
+    const evidenceReference = dto.evidenceHash ?? ipfsResult.hash;
+
+    if (dto.evidenceHash && this.shouldVerifyEvidenceRetrievability()) {
+      await this.assertEvidenceRetrievable(dto.evidenceHash);
+    }
+
     const adminSecret = this.getAdminSecret();
     const nonce = await this.nonceService.next(this.configService.getOracleConsumerAddress(), providerAddress);
 
     const { result } = await this.contractService.invokeContractMethod(
-      this.configService.getOracleConsumer(), 'submit_report', adminSecret,
+      this.configService.getOracleConsumerAddress(), 'submit_report', adminSecret,
       [
         Address.fromString(providerAddress).toScVal(),
         this.toBytes32(dto.projectId),
@@ -60,7 +83,7 @@ async submitReport(dto: SubmitReportDto, providerAddress: string): Promise<Repor
         nativeToScVal(BigInt(dto.periodEnd), { type: 'u64' }),
         nativeToScVal(BigInt(dto.carbonSequestered), { type: 'i128' }),
         nativeToScVal(dto.methodology, { type: 'symbol' }),
-        this.toBytes32(ipfsResult.hash),
+        this.evidenceHashToScVal(evidenceReference),
       ],
       nonce,
     );
@@ -116,7 +139,7 @@ async challengeReport(reportId: number, dto: ChallengeDto, challengerAddress: st
     const nonce = await this.nonceService.next(this.configService.getOracleConsumerAddress(), challengerAddress);
 
     await this.contractService.invokeContractMethod(
-      this.configService.getOracleConsumer(), 'challenge_report', adminSecret,
+      this.configService.getOracleConsumerAddress(), 'challenge_report', adminSecret,
       [
         Address.fromString(challengerAddress).toScVal(),
         nativeToScVal(BigInt(reportId), { type: 'u64' }),
@@ -138,16 +161,41 @@ async challengeReport(reportId: number, dto: ChallengeDto, challengerAddress: st
   }
 
 async registerProvider(dto: RegisterProviderDto): Promise<ProviderResponse> {
+    const methodology = dto.methodology.trim().toUpperCase();
+    if (!OracleService.SUPPORTED_METHODOLOGIES.includes(methodology)) {
+      throw new BadRequestException(
+        `Unsupported methodology "${dto.methodology}". Supported methodologies: ` +
+          `${OracleService.SUPPORTED_METHODOLOGIES.join(', ')}.`,
+      );
+    }
+
+    const existing = await this.findProvider(dto.providerAddress);
+    if (existing) {
+      if (existing.active) {
+        throw new ConflictException(
+          `Provider ${dto.providerAddress} is already registered with methodology "${existing.methodology}".`,
+        );
+      }
+      // The contract has no reactivation path: register_provider rejects any
+      // address already present in storage, active or not (see
+      // OracleError::ProviderAlreadyExists in oracle-consumer/src/lib.rs).
+      // Surface that distinctly so callers don't retry expecting it to work.
+      throw new ConflictException(
+        `Provider ${dto.providerAddress} was previously registered and removed. ` +
+          'This contract does not support reactivating a removed provider; register a different address instead.',
+      );
+    }
+
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
     const nonce = await this.nonceService.next(this.configService.getOracleConsumerAddress(), adminAddress);
 
     await this.contractService.invokeContractMethod(
-      this.configService.getOracleConsumer(), 'register_provider', adminSecret,
+      this.configService.getOracleConsumerAddress(), 'register_provider', adminSecret,
       [
         Address.fromString(adminAddress).toScVal(),
         Address.fromString(dto.providerAddress).toScVal(),
-        nativeToScVal(dto.methodology, { type: 'symbol' }),
+        nativeToScVal(methodology, { type: 'symbol' }),
       ],
       nonce,
     );
@@ -156,11 +204,35 @@ async registerProvider(dto: RegisterProviderDto): Promise<ProviderResponse> {
 
     return {
       providerAddress: dto.providerAddress,
-      methodology: dto.methodology,
+      methodology,
       name: `Oracle ${dto.providerAddress.slice(0, 6)}`,
       active: true,
       registeredAt: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Looks up a provider's current on-chain state, or null if it has never
+   * been registered. Used to validate registration intent before spending a
+   * transaction on a call the contract would reject.
+   */
+  private async findProvider(
+    providerAddress: string,
+  ): Promise<{ methodology: string; active: boolean } | null> {
+    try {
+      const providerScVal = await this.contractService.simulateCall({
+        contractAddress: this.configService.getOracleConsumerAddress(),
+        method: 'get_provider',
+        args: [Address.fromString(providerAddress).toScVal()],
+      });
+      const data = scValToNative(providerScVal) as any[];
+      return {
+        methodology: data[1] as string,
+        active: data[3] as boolean,
+      };
+    } catch {
+      return null;
+    }
   }
 
   async listProviders(): Promise<ProviderResponse[]> {
@@ -335,6 +407,56 @@ async registerProvider(dto: RegisterProviderDto): Promise<ProviderResponse> {
     const hex = Buffer.from(value, 'hex');
     const bytes = hex.length === 32 ? hex : createHash('sha256').update(value).digest();
     return xdr.ScVal.scvBytes(bytes);
+  }
+
+  /**
+   * Encodes a validated evidence reference (CIDv0 or 64-char hex digest) to
+   * the `BytesN<32>` argument `submit_report` expects (issue #93). Unlike
+   * `toBytes32` above (still used for `projectId`, an arbitrary string
+   * that is never a CID), this never silently substitutes a hash of the
+   * input -- `encodeCid` throws for anything that isn't a supported,
+   * correctly-sized evidence reference.
+   */
+  private evidenceHashToScVal(evidenceReference: string): xdr.ScVal {
+    return xdr.ScVal.scvBytes(encodeCid(evidenceReference));
+  }
+
+  private shouldVerifyEvidenceRetrievability(): boolean {
+    return process.env.ORACLE_EVIDENCE_VERIFY_RETRIEVABILITY === 'true';
+  }
+
+  /**
+   * Bounded IPFS/gateway retrievability check (issue #93), off by default
+   * and only ever invoked for a caller-supplied `evidenceHash` -- format
+   * validation (see `SubmitReportDto`) is the only check that runs
+   * unconditionally, so tests for it stay deterministic and
+   * network-independent per this issue's contributor guidance. Only
+   * meaningful for a CIDv0 reference: a bare hex digest names no gateway to
+   * fetch from, so it is skipped rather than treated as unretrievable.
+   */
+  private async assertEvidenceRetrievable(evidenceHash: string): Promise<void> {
+    if (!evidenceHash.startsWith('Qm')) return;
+
+    const gateway = process.env.IPFS_GATEWAY || 'https://gateway.pinata.cloud/ipfs/';
+    const timeoutMs = Number(process.env.ORACLE_EVIDENCE_RETRIEVABILITY_TIMEOUT_MS) || 5000;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(`${gateway}${evidenceHash}`, { signal: controller.signal });
+      if (!response.ok) {
+        throw new UnprocessableEntityException(
+          `Evidence ${evidenceHash} is not retrievable from the configured IPFS gateway (status ${response.status}).`,
+        );
+      }
+    } catch (error) {
+      if (error instanceof UnprocessableEntityException) throw error;
+      throw new UnprocessableEntityException(
+        `Evidence ${evidenceHash} could not be retrieved from the configured IPFS gateway: ${(error as Error).message}`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private getAdminSecret(): string {

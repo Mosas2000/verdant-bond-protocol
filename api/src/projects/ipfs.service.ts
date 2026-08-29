@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { IpfsUploadPolicy } from './ipfs-upload.policy';
 
 interface IpfsUploadResult {
   hash: string;
@@ -15,6 +16,8 @@ export class IpfsService {
     secretKey: process.env.IPFS_SECRET_KEY || '',
     gateway: process.env.IPFS_GATEWAY || 'https://gateway.pinata.cloud/ipfs/',
   };
+
+  constructor(private readonly uploadPolicy: IpfsUploadPolicy) {}
 
   async uploadJson(data: Record<string, unknown>): Promise<IpfsUploadResult> {
     const response = await fetch(
@@ -46,11 +49,21 @@ export class IpfsService {
     };
   }
 
-  async uploadFile(buffer: Buffer, filename: string): Promise<IpfsUploadResult> {
+  async uploadFile(
+    buffer: Buffer,
+    filename: string,
+    mimetype?: string,
+  ): Promise<IpfsUploadResult> {
+    await this.uploadPolicy.validate({
+      buffer,
+      filename,
+      mimetype: mimetype ?? '',
+    });
     return this.uploadJson({
       filename,
       content: buffer.toString('base64'),
       size: buffer.length,
+      mimetype: mimetype ?? 'application/octet-stream',
     });
   }
 

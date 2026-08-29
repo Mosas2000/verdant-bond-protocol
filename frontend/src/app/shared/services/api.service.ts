@@ -1,16 +1,34 @@
 import { Injectable, inject } from '@angular/core';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { Observable } from 'rxjs';
+import { HttpClient, HttpErrorResponse, HttpHeaders, HttpParams } from '@angular/common/http';
+import { catchError, Observable, throwError } from 'rxjs';
 import { AuthService } from '../../auth/auth.service';
 import { WalletService } from '../../auth/wallet.service';
 import {
   Bond, HeldBond, Project, Order, PaginatedResponse,
-  SubscriptionResponse, CreateProjectDto, ListBondDto, BuyBondDto,
+  SubscriptionResponse, CreateProjectDto, CreateBondDto, OrderQueryParams, ListBondDto, BuyBondDto,
   ClaimCreditsResponse, TransferResponse,
   UndistributedTotalResponse, SweepUndistributedResponse,
   QuoteBalanceResponse, QuoteTransactionResponse,
   QuoteAsset, DepositQuoteDto, WithdrawQuoteDto,
 } from '../interfaces/bond.interface';
+
+export interface ProblemDetails {
+  type: string;
+  title: string;
+  status: number;
+  detail: string;
+  code: string;
+  instance?: string;
+  correlationId?: string;
+  errors?: Array<{ field: string; message: string }>;
+  contract?: { address?: string; method?: string; rawErrorCode?: number };
+}
+
+export class ApiProblemError extends Error {
+  constructor(readonly problem: ProblemDetails) {
+    super(problem.detail || problem.title);
+  }
+}
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
@@ -30,99 +48,114 @@ export class ApiService {
     return headers;
   }
 
+  private withProblemDetails<T>(source: Observable<T>): Observable<T> {
+    return source.pipe(
+      catchError((error: HttpErrorResponse) => {
+        const body = error.error;
+        if (body && typeof body === 'object' && 'type' in body && 'status' in body && 'code' in body) {
+          return throwError(() => new ApiProblemError(body as ProblemDetails));
+        }
+        return throwError(() => error);
+      }),
+    );
+  }
+
   getBonds(page = 1, limit = 20): Observable<PaginatedResponse<Bond>> {
-    return this.http.get<PaginatedResponse<Bond>>('/api/bonds', {
+    return this.withProblemDetails(this.http.get<PaginatedResponse<Bond>>('/api/bonds', {
       params: { page, limit },
       headers: this.headers(),
-    });
+    }));
   }
 
   getBond(id: number): Observable<Bond> {
-    return this.http.get<Bond>(`/api/bonds/${id}`, { headers: this.headers() });
+    return this.withProblemDetails(this.http.get<Bond>(`/api/bonds/${id}`, { headers: this.headers() }));
   }
 
   getHeldBonds(address: string): Observable<HeldBond[]> {
-    return this.http.get<HeldBond[]>(`/api/bonds/held/${address}`, {
+    return this.withProblemDetails(this.http.get<HeldBond[]>(`/api/bonds/held/${address}`, {
       headers: this.headers(),
-    });
+    }));
   }
 
-  issueBond(data: any): Observable<Bond> {
-    return this.http.post<Bond>('/api/bonds', data, { headers: this.headers() });
+  issueBond(data: CreateBondDto): Observable<Bond> {
+    return this.withProblemDetails(this.http.post<Bond>('/api/bonds', data, { headers: this.headers() }));
   }
 
   subscribeToBond(id: number, amount: number): Observable<SubscriptionResponse> {
     const investorAddress = this.walletService.address();
-    return this.http.post<SubscriptionResponse>(
+    return this.withProblemDetails(this.http.post<SubscriptionResponse>(
       `/api/bonds/${id}/subscribe`,
       { amount, investorAddress },
       { headers: this.headers() },
-    );
+    ));
   }
 
   claimCredits(id: number): Observable<ClaimCreditsResponse> {
     const investorAddress = this.walletService.address();
-    return this.http.post<ClaimCreditsResponse>(
+    return this.withProblemDetails(this.http.post<ClaimCreditsResponse>(
       `/api/bonds/${id}/claim`,
       { investorAddress },
       { headers: this.headers() },
-    );
+    ));
   }
 
   transferBond(id: number, toAddress: string, amount: number): Observable<TransferResponse> {
     const fromAddress = this.walletService.address();
-    return this.http.post<TransferResponse>(
+    return this.withProblemDetails(this.http.post<TransferResponse>(
       `/api/bonds/${id}/transfer`,
       { fromAddress, toAddress, amount },
       { headers: this.headers() },
-    );
+    ));
   }
 
   getUndistributedTotal(id: number): Observable<UndistributedTotalResponse> {
-    return this.http.get<UndistributedTotalResponse>(
+    return this.withProblemDetails(this.http.get<UndistributedTotalResponse>(
       `/api/bonds/${id}/undistributed`,
       { headers: this.headers() },
-    );
+    ));
   }
 
   sweepUndistributed(id: number): Observable<SweepUndistributedResponse> {
-    return this.http.post<SweepUndistributedResponse>(
+    return this.withProblemDetails(this.http.post<SweepUndistributedResponse>(
       `/api/bonds/${id}/sweep-undistributed`,
       {},
       { headers: this.headers() },
-    );
+    ));
   }
 
   getProjects(page = 1, limit = 20): Observable<PaginatedResponse<Project>> {
-    return this.http.get<PaginatedResponse<Project>>('/api/projects', {
+    return this.withProblemDetails(this.http.get<PaginatedResponse<Project>>('/api/projects', {
       params: { page, limit },
-    });
+    }));
   }
 
   getProject(id: number): Observable<Project> {
-    return this.http.get<Project>(`/api/projects/${id}`);
+    return this.withProblemDetails(this.http.get<Project>(`/api/projects/${id}`));
   }
 
   registerProject(data: CreateProjectDto): Observable<Project> {
-    return this.http.post<Project>('/api/projects', data, { headers: this.headers() });
+    return this.withProblemDetails(this.http.post<Project>('/api/projects', data, { headers: this.headers() }));
   }
 
-  getOrders(bondId?: number, refresh = false): Observable<PaginatedResponse<Order>> {
-    const params: any = {};
-    if (bondId) params.bondId = bondId;
+  getOrders(params: OrderQueryParams = {}, refresh = false): Observable<PaginatedResponse<Order>> {
+    let queryParams = new HttpParams();
+    if (params.bondId !== undefined) queryParams = queryParams.set('bondId', params.bondId);
+    if (params.status !== undefined) queryParams = queryParams.set('status', params.status);
+    if (params.page !== undefined) queryParams = queryParams.set('page', params.page);
+    if (params.limit !== undefined) queryParams = queryParams.set('limit', params.limit);
     // Bypass any client-side/proxy HTTP caching so a refresh always hits the server.
-    if (refresh) params._t = Date.now();
-    return this.http.get<PaginatedResponse<Order>>('/api/marketplace/orders', {
-      params, headers: this.headers(),
-    });
+    if (refresh) queryParams = queryParams.set('_t', Date.now());
+    return this.withProblemDetails(this.http.get<PaginatedResponse<Order>>('/api/marketplace/orders', {
+      params: queryParams, headers: this.headers(),
+    }));
   }
 
   listBondTokens(data: ListBondDto): Observable<Order> {
-    return this.http.post<Order>('/api/marketplace/list', data, { headers: this.headers() });
+    return this.withProblemDetails(this.http.post<Order>('/api/marketplace/list', data, { headers: this.headers() }));
   }
 
   buyBondTokens(data: BuyBondDto): Observable<void> {
-    return this.http.post<void>('/api/marketplace/buy', data, { headers: this.headers() });
+    return this.withProblemDetails(this.http.post<void>('/api/marketplace/buy', data, { headers: this.headers() }));
   }
 
   cancelOrder(orderId: number): Observable<void> {
@@ -130,24 +163,24 @@ export class ApiService {
   }
 
   getQuoteBalance(asset: QuoteAsset = 'USDC'): Observable<QuoteBalanceResponse> {
-    return this.http.get<QuoteBalanceResponse>('/api/marketplace/quote-balance', {
+    return this.withProblemDetails(this.http.get<QuoteBalanceResponse>('/api/marketplace/quote-balance', {
       params: { asset },
       headers: this.headers(),
-    });
+    }));
   }
 
   getWalletBalance(asset: QuoteAsset = 'USDC'): Observable<QuoteBalanceResponse> {
-    return this.http.get<QuoteBalanceResponse>('/api/marketplace/wallet-balance', {
+    return this.withProblemDetails(this.http.get<QuoteBalanceResponse>('/api/marketplace/wallet-balance', {
       params: { asset },
       headers: this.headers(),
-    });
+    }));
   }
 
   depositQuote(data: DepositQuoteDto): Observable<QuoteTransactionResponse> {
-    return this.http.post<QuoteTransactionResponse>('/api/marketplace/deposit', data, { headers: this.headers() });
+    return this.withProblemDetails(this.http.post<QuoteTransactionResponse>('/api/marketplace/deposit', data, { headers: this.headers() }));
   }
 
   withdrawQuote(data: WithdrawQuoteDto): Observable<QuoteTransactionResponse> {
-    return this.http.post<QuoteTransactionResponse>('/api/marketplace/withdraw', data, { headers: this.headers() });
+    return this.withProblemDetails(this.http.post<QuoteTransactionResponse>('/api/marketplace/withdraw', data, { headers: this.headers() }));
   }
 }

@@ -127,6 +127,14 @@ chore(ci): add cargo-audit to workflow
 - Use Angular reactive forms for user input
 - Follow the existing component structure in `frontend/src/app/shared/`
 
+### Accessibility Checklist
+
+- Confirm wallet, project creation, bond detail, marketplace, and claim flows are usable with keyboard navigation only.
+- Ensure every interactive control has a visible focus state and an accessible name.
+- Tie validation errors to their fields with `aria-describedby`, and announce form-level failures with `role="alert"` or `aria-live`.
+- Verify dialogs, menus, and dropdowns can be opened, used, and dismissed without losing focus.
+- Add or update automated accessibility assertions for shared controls when changing core workflows.
+
 ## Testing
 
 ### Smart Contracts

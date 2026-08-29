@@ -33,6 +33,7 @@ describe('MarketplaceListComponent', () => {
     buyBondTokens: jasmine.Spy;
     cancelOrder: jasmine.Spy;
     getQuoteBalance: jasmine.Spy;
+    getWalletBalance: jasmine.Spy;
   };
   let walletService: {
     isConnected: ReturnType<typeof signal<boolean>>;
@@ -47,6 +48,11 @@ describe('MarketplaceListComponent', () => {
       cancelOrder: jasmine.createSpy('cancelOrder').and.returnValue(of(undefined)),
       getQuoteBalance: jasmine
         .createSpy('getQuoteBalance')
+        .and.callFake((asset: string) =>
+          of({ address: 'GALICE', asset, balance: asset === 'USDC' ? 100 : 0 }),
+        ),
+      getWalletBalance: jasmine
+        .createSpy('getWalletBalance')
         .and.callFake((asset: string) =>
           of({ address: 'GALICE', asset, balance: asset === 'USDC' ? 100 : 0 }),
         ),

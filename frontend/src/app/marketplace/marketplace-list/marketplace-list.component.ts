@@ -372,7 +372,7 @@ export class MarketplaceListComponent implements OnInit, OnDestroy {
     this.error.set('');
     // defer re-invokes the API call on every (re)subscription, so retries issue a
     // fresh request with a fresh cache-busting param instead of reusing a stale one.
-    return defer(() => this.apiService.getOrders(this.filterBondId() ?? undefined, forceRefresh)).pipe(
+    return defer(() => this.apiService.getOrders({ bondId: this.filterBondId() ?? undefined }, forceRefresh)).pipe(
       retry({
         count: ORDERS_RETRY_COUNT,
         delay: (error, attempt) =>

@@ -163,7 +163,7 @@ export class MarketplaceSellComponent implements OnInit {
 
   private updateSelectedBalance(bondId: unknown): void {
     const heldBond = this.bonds().find((bond) => bond.id === Number(bondId));
-    this.selectedBalance.set(heldBond ? Number(heldBond.balance) : null);
+    this.selectedBalance.set(heldBond?.balance != null ? Number(heldBond.balance) : null);
   }
 
   onSubmit(): void {
