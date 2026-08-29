@@ -213,6 +213,77 @@ Reports follow a strict status lifecycle managed by `OracleConsumer`:
 
 ## API Layer
 
+### KYC State Model (Durable Compliance Store)
+
+KYC state used to live **only** in Redis under `kyc:<address>` — volatile, unauditable,
+and indistinguishable from cache. It is now a three-layer model:
+
+| Layer | Store | Role | Notes |
+| ----- | ----- | ---- | ----- |
+| 1 (Source of Truth) | `KycStoreService` — durable JSON snapshot + append-only JSONL audit log in `data/kyc/` (configurable via `KYC_STORE_DIR`) | Every status change is a persisted `KycAuditEntry` with from/to status, actor, reason, providerReference, and expiresAt. | Snapshot is atomic (`rename` from `.tmp.<pid>`); audit is `fs.appendFile` so a snapshot loss can be replayed. |
+| 2 (Write-through cache) | Redis `kyc:<address>` → JSON-encoded `KycRecord` with 60s TTL | Eliminates durable reads on every guard check. | Invalidated + re-written on every transition. Malformed cache rows fall back to durable store. |
+| 3 (Access / Guard) | `KycGuard` + `AuthService.getProfile` | Always goes through `KycService`, never talks to Redis directly. | |
+
+**KycRecord shape (durable + cache):**
+```ts
+{
+  address,
+  status: NONE | PENDING | VERIFIED | ACCREDITED | EXPIRED | REJECTED,
+  source: 'provider' | 'admin' | 'system' | 'import',
+  actor,               // admin/provider identity that performed the change
+  reason,              // human-readable justification
+  providerReference,   // opaque ID from the external KYC vendor (audit linkage)
+  createdAt, updatedAt, expiresAt
+}
+```
+
+**KycAuditEntry shape (append-only log):**
+```ts
+{ id, address, fromStatus, toStatus, source, actor, reason, providerReference, expiresAt, timestamp }
+```
+
+**Status lifecycle / downgrade semantics:**
+
+```
+   NONE → PENDING ──► VERIFIED ──► ACCREDITED
+                     │    │            │
+                     │    │            │  expiresAt <= now
+                     │    ▼            ▼
+                     │  EXPIRED ◄──────┘   (automatic on lookup + logged as system transition)
+                     │
+                     ▼
+                  REJECTED   (admin with mandatory reason)
+```
+
+- An expired `VERIFIED` / `ACCREDITED` record becomes effective `EXPIRED` on read.
+  The next full-read (`getFullStatus`) writes a durable `EXPIRED` transition for audit
+  so the downgrade is visible without inferring it from timestamp math.
+- `REJECTED` is a terminal state that requires a mandatory `reason`.
+- The KYC guard throws differentiated 403 messages: `KYC verification has expired`,
+  `KYC verification was rejected`, or the generic `KYC verification required`.
+
+**Admin API endpoints** (all behind `JwtAuthGuard`; real deployments should gate with an admin role):
+
+| Method | Endpoint             | Description |
+| ------ | -------------------- | ----------- |
+| GET    | /auth/profile        | Own profile enriched with KYC record + last 50 audit entries |
+| GET    | /auth/kyc/:address   | Read another user's KYC record + 100-entry audit tail |
+| POST   | /auth/kyc/:address   | Admin status transition: `{ status, source?, actor?, reason?, providerReference?, expiresAt? }` → returns `{ record, entry, isNew }` |
+
+**Operational notes:**
+- Set `KYC_STORE_DIR` to a persistent volume mount in production. An ephemeral container
+  filesystem is still better than Redis-only (you can backup the JSONL log), but the
+  intended production setup is bind-mounted storage or a switch of `KycStoreService` to
+  the same Postgres used for `DATABASE_URL`.
+- Redis is **cache only**. `FLUSHALL` does not lose compliance state. You can rebuild
+  every `kyc:<address>` cache entry by iterating `KycStoreService.list()` and writing
+  through.
+- Audit log is the compliance trail. Never truncate `kyc-audit.log.jsonl`. It is replayed
+  on startup after loading `kyc-records.json`, so the snapshot is only a performance
+  optimisation — the log is ground truth.
+
+### Method Table
+
 | Method | Endpoint                       | Description                                         |
 | ------ | ------------------------------ | --------------------------------------------------- |
 | POST   | /bonds                         | Issue a new bond tranche                            |

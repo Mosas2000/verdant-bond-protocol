@@ -7,20 +7,38 @@ import { StellarService } from '../stellar/stellar.service';
 import { KycService } from './kyc.service';
 import { VerifySignatureDto } from './dto/verify-signature.dto';
 import { ChallengeResponse, AuthTokenResponse, UserProfileResponse } from './interfaces/auth.interface';
+import { ConfigService } from '../config/config.service';
+
+const CHALLENGE_TTL_SECONDS = 300;
+
+interface StoredChallenge {
+  challenge: string;
+  nonce: string;
+  address: string;
+  timestamp: number;
+  audience: string;
+}
+
+const AUDIENCE =
+  process.env.APP_URL || process.env.BASE_URL || 'verdant-bond-protocol';
 
 @Injectable()
 export class AuthService {
-  private readonly accessTokenExpiry = process.env.JWT_EXPIRY || '15m';
-  private readonly refreshTokenExpiry = process.env.JWT_REFRESH_EXPIRY || '7d';
-  private readonly refreshTokenSecret =
-    process.env.JWT_REFRESH_SECRET || `${process.env.JWT_SECRET || 'dev-secret-change-in-production'}:refresh`;
+  private readonly accessTokenExpiry: string;
+  private readonly refreshTokenExpiry: string;
+  private readonly refreshTokenSecret: string;
 
   constructor(
     private readonly jwtService: JwtService,
     private readonly kycService: KycService,
     private readonly stellarService: StellarService,
     private readonly redis: RedisService,
-  ) {}
+    private readonly config: ConfigService,
+  ) {
+    this.accessTokenExpiry = this.config.getJwtExpiry();
+    this.refreshTokenExpiry = this.config.getJwtRefreshExpiry();
+    this.refreshTokenSecret = this.config.getJwtRefreshSecret();
+  }
 
   async generateChallenge(address: string): Promise<ChallengeResponse> {
     if (!this.stellarService.isValidPublicKey(address)) {
@@ -28,17 +46,62 @@ export class AuthService {
     }
 
     const nonce = crypto.randomBytes(32).toString('hex');
-    const challenge = `Verdant Bond Protocol sign-in\nAddress: ${address}\nNonce: ${nonce}\nTimestamp: ${Date.now()}`;
+    const timestamp = Date.now();
+    const challenge = `Verdant Bond Protocol sign-in\nAddress: ${address}\nNonce: ${nonce}\nTimestamp: ${timestamp}`;
 
-    await this.redis.set(`challenge:${address}`, challenge, { EX: 300 });
+    const stored: StoredChallenge = {
+      challenge,
+      nonce,
+      address,
+      timestamp,
+      audience: AUDIENCE,
+    };
+
+    await this.redis.set(
+      `challenge:${address}`,
+      JSON.stringify(stored),
+      { EX: CHALLENGE_TTL_SECONDS },
+    );
 
     return { challenge, nonce };
   }
 
   async verifySignature(dto: VerifySignatureDto): Promise<AuthTokenResponse> {
-    const storedChallenge = await this.redis.get(`challenge:${dto.address}`);
-    if (!storedChallenge || storedChallenge !== dto.originalChallenge) {
-      throw new UnauthorizedException('Challenge not found or expired');
+    const raw = await this.redis.getDel(`challenge:${dto.address}`);
+    if (!raw) {
+      throw new UnauthorizedException(
+        'Challenge not found, expired, or already consumed. Please request a fresh challenge.',
+      );
+    }
+
+    let stored: StoredChallenge;
+    try {
+      stored = JSON.parse(raw) as StoredChallenge;
+    } catch {
+      throw new UnauthorizedException(
+        'Challenge record is malformed. Please request a fresh challenge.',
+      );
+    }
+
+    if (stored.address !== dto.address) {
+      throw new UnauthorizedException(
+        'Challenge was not issued for this address. Please request a fresh challenge.',
+      );
+    }
+
+    if (stored.challenge !== dto.originalChallenge) {
+      throw new UnauthorizedException(
+        'Challenge content does not match issued challenge. Please request a fresh challenge.',
+      );
+    }
+
+    if (
+      stored.timestamp <
+      Date.now() - CHALLENGE_TTL_SECONDS * 1000
+    ) {
+      throw new UnauthorizedException(
+        'Challenge has expired. Please request a fresh challenge.',
+      );
     }
 
     const keypair = Keypair.fromPublicKey(dto.address);
@@ -50,8 +113,6 @@ export class AuthService {
     if (!isValid) {
       throw new UnauthorizedException('Invalid signature');
     }
-
-    await this.redis.del(`challenge:${dto.address}`);
 
     const kycStatus = await this.kycService.getStatus(dto.address);
 
