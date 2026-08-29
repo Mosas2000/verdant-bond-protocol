@@ -1,11 +1,11 @@
 import { Injectable, inject } from '@angular/core';
-import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse, HttpHeaders, HttpParams } from '@angular/common/http';
 import { catchError, Observable, throwError } from 'rxjs';
 import { AuthService } from '../../auth/auth.service';
 import { WalletService } from '../../auth/wallet.service';
 import {
   Bond, HeldBond, Project, Order, PaginatedResponse,
-  SubscriptionResponse, CreateProjectDto, ListBondDto, BuyBondDto,
+  SubscriptionResponse, CreateProjectDto, CreateBondDto, OrderQueryParams, ListBondDto, BuyBondDto,
   ClaimCreditsResponse, TransferResponse,
   UndistributedTotalResponse, SweepUndistributedResponse,
   QuoteBalanceResponse, QuoteTransactionResponse,
@@ -77,7 +77,7 @@ export class ApiService {
     }));
   }
 
-  issueBond(data: any): Observable<Bond> {
+  issueBond(data: CreateBondDto): Observable<Bond> {
     return this.withProblemDetails(this.http.post<Bond>('/api/bonds', data, { headers: this.headers() }));
   }
 
@@ -137,13 +137,16 @@ export class ApiService {
     return this.withProblemDetails(this.http.post<Project>('/api/projects', data, { headers: this.headers() }));
   }
 
-  getOrders(bondId?: number, refresh = false): Observable<PaginatedResponse<Order>> {
-    const params: any = {};
-    if (bondId) params.bondId = bondId;
+  getOrders(params: OrderQueryParams = {}, refresh = false): Observable<PaginatedResponse<Order>> {
+    let queryParams = new HttpParams();
+    if (params.bondId !== undefined) queryParams = queryParams.set('bondId', params.bondId);
+    if (params.status !== undefined) queryParams = queryParams.set('status', params.status);
+    if (params.page !== undefined) queryParams = queryParams.set('page', params.page);
+    if (params.limit !== undefined) queryParams = queryParams.set('limit', params.limit);
     // Bypass any client-side/proxy HTTP caching so a refresh always hits the server.
-    if (refresh) params._t = Date.now();
+    if (refresh) queryParams = queryParams.set('_t', Date.now());
     return this.withProblemDetails(this.http.get<PaginatedResponse<Order>>('/api/marketplace/orders', {
-      params, headers: this.headers(),
+      params: queryParams, headers: this.headers(),
     }));
   }
 
