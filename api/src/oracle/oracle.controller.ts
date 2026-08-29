@@ -1,10 +1,11 @@
 import {
-  Controller, Get, Post, Body, Param, Query, Req,
+  Controller, Get, Post, Body, Param, Req,
   HttpCode, HttpStatus, ParseIntPipe, UseGuards,
 } from '@nestjs/common';
 import { OracleService } from './oracle.service';
 import { OracleMonitoringService } from './oracle.monitoring.service';
-import { OracleIncidentRepository } from './oracle-incident.repository';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { ProviderGuard } from '../common/guards/provider.guard';
 import { SubmitReportDto } from './dto/submit-report.dto';
 import { ChallengeDto } from './dto/challenge.dto';
 import { RegisterProviderDto } from './dto/register-provider.dto';
@@ -35,13 +36,13 @@ export class OracleController {
   ) {}
 
   @Post('reports')
-  @RateLimit({ type: 'oracle' })
+  @UseGuards(JwtAuthGuard, ProviderGuard)
   @HttpCode(HttpStatus.CREATED)
   async submitReport(
     @Body() dto: SubmitReportDto,
     @Req() req: any,
   ): Promise<ReportResponse> {
-    const providerAddress = req.headers['x-provider-address'] as string || process.env.DEFAULT_PROVIDER_ADDRESS || '';
+    const providerAddress = req.user.walletAddress;
     return this.oracleService.submitReport(dto, providerAddress);
   }
 
@@ -88,14 +89,14 @@ export class OracleController {
   }
 
   @Post('challenge/:reportId')
-  @RateLimit({ type: 'oracle' })
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   async challengeReport(
     @Param('reportId', ParseIntPipe) reportId: number,
     @Body() dto: ChallengeDto,
     @Req() req: any,
   ): Promise<ChallengeResponse> {
-    const challengerAddress = req.headers['x-wallet-address'] as string || '';
+    const challengerAddress = req.user.walletAddress;
     return this.oracleService.challengeReport(reportId, dto, challengerAddress);
   }
 

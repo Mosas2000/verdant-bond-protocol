@@ -1,11 +1,13 @@
 import {
   Controller, Get, Post, Delete, Body, Param, Query, Req,
   HttpCode, HttpStatus, ParseIntPipe, NotFoundException,
+  HttpCode, HttpStatus, ParseIntPipe, UseGuards,
 } from '@nestjs/common';
 import { DexService } from './dex.service';
 import { LiquidityService } from './liquidity.service';
 import { StellarService } from '../stellar/stellar.service';
 import { DexReconciliationService, ReconciliationReport } from './dex.reconciliation.service';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { ListBondDto } from './dto/list-bond.dto';
 import { BuyBondDto } from './dto/buy-bond.dto';
 import { DepositQuoteDto } from './dto/deposit-quote.dto';
@@ -57,77 +59,79 @@ export class MarketplaceController {
   }
 
   @Post('list')
-  @RateLimit({ type: 'mutation' })
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.CREATED)
   async listBondTokens(
     @Body() dto: ListBondDto,
     @Req() req: any,
   ): Promise<OrderResponse> {
-    const sellerAddress = req.headers['x-wallet-address'] as string || '';
+    const sellerAddress = req.user.walletAddress;
     return this.dexService.listBondTokens(dto, sellerAddress);
   }
 
   @Post('buy')
-  @RateLimit({ type: 'mutation' })
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   async buyBondTokens(
     @Body() dto: BuyBondDto,
     @Req() req: any,
   ): Promise<OrderResponse> {
-    const buyerAddress = req.headers['x-wallet-address'] as string || '';
+    const buyerAddress = req.user.walletAddress;
     return this.dexService.buyBondTokens(dto, buyerAddress);
   }
 
   @Get('quote-balance')
+  @UseGuards(JwtAuthGuard)
   async getQuoteBalance(
     @Query() query: QuoteBalanceQueryDto,
     @Req() req: any,
   ): Promise<QuoteBalanceResponse> {
-    const address = req.headers['x-wallet-address'] as string || '';
+    const address = req.user.walletAddress;
     return this.dexService.getQuoteBalance(address, query.asset ?? 'USDC');
   }
 
   @Get('wallet-balance')
+  @UseGuards(JwtAuthGuard)
   async getWalletBalance(
     @Query() query: QuoteBalanceQueryDto,
     @Req() req: any,
   ): Promise<QuoteBalanceResponse> {
-    const address = req.headers['x-wallet-address'] as string || '';
+    const address = req.user.walletAddress;
     const asset = query.asset ?? 'USDC';
     const balanceStr = await this.stellarService.getBalance(address, asset);
     return { address, asset, balance: balanceStr };
   }
 
   @Post('deposit')
-  @RateLimit({ type: 'mutation' })
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   async depositQuote(
     @Body() dto: DepositQuoteDto,
     @Req() req: any,
   ): Promise<QuoteTransactionResponse> {
-    const address = req.headers['x-wallet-address'] as string || '';
+    const address = req.user.walletAddress;
     return this.dexService.depositQuote(dto, address);
   }
 
   @Post('withdraw')
-  @RateLimit({ type: 'mutation' })
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   async withdrawQuote(
     @Body() dto: WithdrawQuoteDto,
     @Req() req: any,
   ): Promise<QuoteTransactionResponse> {
-    const address = req.headers['x-wallet-address'] as string || '';
+    const address = req.user.walletAddress;
     return this.dexService.withdrawQuote(dto, address);
   }
 
   @Delete('orders/:id')
-  @RateLimit({ type: 'mutation' })
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
   async cancelOrder(
     @Param('id', ParseIntPipe) id: number,
     @Req() req: any,
   ): Promise<void> {
-    const callerAddress = req.headers['x-wallet-address'] as string || '';
+    const callerAddress = req.user.walletAddress;
     return this.dexService.cancelOrder(id, callerAddress);
   }
 
