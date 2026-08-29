@@ -3,6 +3,8 @@ import { CommonModule } from '@angular/common';
 import { RouterModule, Router } from '@angular/router';
 import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ApiService } from '../../shared/services/api.service';
+import { CreateBondDto } from '../../shared/interfaces/bond.interface';
+import { appErrorMessage } from '../../shared/errors/api-error';
 
 @Component({
   selector: 'app-issue-bond',
@@ -130,22 +132,27 @@ export class IssueBondComponent {
     this.error.set('');
     this.success.set(false);
 
-    const formValue = { ...this.form.value };
-    formValue.maturityDate = new Date(formValue.maturityDate).getTime();
-    formValue.couponSchedule = String(formValue.couponSchedule || '')
+    const formValue = this.form.getRawValue();
+    const data: CreateBondDto = {
+      projectId: formValue.projectId,
+      faceValue: Number(formValue.faceValue),
+      creditType: formValue.creditType,
+      totalSupply: Number(formValue.totalSupply),
+      maturityDate: Math.floor(new Date(formValue.maturityDate).getTime() / 1000),
+      couponSchedule: String(formValue.couponSchedule || '')
       .split(',')
       .map((v: string) => Number(v.trim()))
-      .filter((v: number) => Number.isFinite(v) && v > 0);
-    formValue.maturityDate = new Date(formValue.maturityDate).getTime();
+      .filter((v: number) => Number.isFinite(v) && v > 0),
+    };
 
-    this.apiService.issueBond(formValue).subscribe({
+    this.apiService.issueBond(data).subscribe({
       next: () => {
         this.success.set(true);
         this.submitting.set(false);
         setTimeout(() => this.router.navigate(['/bonds']), 1500);
       },
       error: (err) => {
-        this.error.set(err.error?.detail || err.message || 'Failed to issue bond');
+        this.error.set(appErrorMessage(err, 'Failed to issue bond'));
         this.submitting.set(false);
       },
     });

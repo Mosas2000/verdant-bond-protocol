@@ -13,28 +13,31 @@ import {
   AuthTokenResponse,
   UserProfileResponse,
 } from './interfaces/auth.interface';
+import { RateLimit } from '../common/decorators/rate-limit.decorator';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('challenge')
+  @RateLimit({ type: 'auth' })
   @HttpCode(HttpStatus.OK)
   async challenge(@Body() dto: ChallengeDto): Promise<ChallengeResponse> {
     return this.authService.generateChallenge(dto.address);
   }
 
   @Post('verify')
+  @RateLimit({ type: 'auth' })
   @HttpCode(HttpStatus.OK)
   async verify(@Body() dto: VerifySignatureDto): Promise<AuthTokenResponse> {
     return this.authService.verifySignature(dto);
   }
 
   @Post('refresh')
-  @UseGuards(JwtAuthGuard)
+  @RateLimit({ type: 'auth' })
   @HttpCode(HttpStatus.OK)
   async refresh(@Body() dto: RefreshTokenDto): Promise<AuthTokenResponse> {
-    return this.authService.refreshToken(dto.accessToken);
+    return this.authService.refreshToken(dto.refreshToken);
   }
 
   @Get('profile')

@@ -1,15 +1,28 @@
 export interface Bond {
   id: number;
   projectId: string;
-  faceValue: number;
-  couponSchedule: number[];
+  faceValue: string;
+  couponSchedule: string[];
   creditType: 'Carbon' | 'Biodiversity' | 'Basket' | 'BlueCarbon';
   maturityDate: number;
   maturityStatus: 'Active' | 'Matured';
-  totalSupply: number;
-  totalSubscribed: number;
+  totalSupply: string;
+  totalSubscribed: string;
   status: 'Active' | 'Matured' | 'Defaulted';
   createdAt: string;
+}
+
+export interface CreateBondDto {
+  projectId: string;
+  faceValue: number;
+  couponSchedule: number[];
+  creditType: Bond['creditType'];
+  maturityDate: number;
+  totalSupply: number;
+}
+
+export interface HeldBond extends Bond {
+  balance: string;
 }
 
 export interface Project {
@@ -31,11 +44,18 @@ export interface Order {
   id: number;
   seller: string;
   bondId: number;
-  amount: number;
-  pricePerToken: number;
+  amount: string;
+  pricePerToken: string;
   quoteAsset: QuoteAsset;
   status: 'Open' | 'PartiallyFilled' | 'Filled' | 'Cancelled' | 'Expired';
   createdAt: string;
+}
+
+export interface OrderQueryParams {
+  bondId?: number;
+  status?: Order['status'];
+  page?: number;
+  limit?: number;
 }
 
 export interface PaginatedResponse<T> {
@@ -46,14 +66,14 @@ export interface PaginatedResponse<T> {
 export interface SubscriptionResponse {
   bondId: number;
   subscriber: string;
-  amount: number;
+  amount: string;
   transactionHash: string;
 }
 
 export interface ClaimCreditsResponse {
   bondId: number;
   investorAddress: string;
-  credits: number;
+  credits: string;
   transactionHash: string;
 }
 
@@ -61,18 +81,18 @@ export interface TransferResponse {
   bondId: number;
   fromAddress: string;
   toAddress: string;
-  amount: number;
+  amount: string;
   transactionHash: string;
 }
 
 export interface UndistributedTotalResponse {
   bondId: number;
-  undistributedTotal: number;
+  undistributedTotal: string;
 }
 
 export interface SweepUndistributedResponse {
   bondId: number;
-  swept: number;
+  swept: string;
   transactionHash: string;
 }
 
@@ -106,13 +126,13 @@ export interface BuyBondDto {
 export interface QuoteBalanceResponse {
   address: string;
   asset: QuoteAsset;
-  balance: number;
+  balance: string;
 }
 
 export interface QuoteTransactionResponse {
   address: string;
   asset: QuoteAsset;
-  amount: number;
+  amount: string;
   transactionHash?: string;
 }
 

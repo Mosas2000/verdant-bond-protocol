@@ -1,11 +1,12 @@
 import { Component, inject, OnInit, ChangeDetectionStrategy, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule, Router, ActivatedRoute } from '@angular/router';
-import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
+import { AbstractControl, FormBuilder, FormGroup, ReactiveFormsModule, ValidationErrors, ValidatorFn, Validators } from '@angular/forms';
 import { ApiService } from '../../shared/services/api.service';
 import { WalletService } from '../../auth/wallet.service';
 import { QuoteBalanceComponent } from '../../shared/components/quote-balance/quote-balance.component';
 import { Bond } from '../../shared/interfaces/bond.interface';
+import { appErrorMessage } from '../../shared/errors/api-error';
 
 @Component({
   selector: 'app-marketplace-sell',
@@ -44,10 +45,15 @@ import { Bond } from '../../shared/interfaces/bond.interface';
           <div class="form-group">
             <label class="form-label" for="amount">Amount</label>
             <input id="amount" type="number" class="form-input" formControlName="amount" placeholder="100" />
-            @if (form.get('amount')?.invalid && form.get('amount')?.touched) {
+            @if (form.get('amount')?.hasError('exceedsBalance')) {
+              <span class="form-error">Amount exceeds your balance of {{ selectedBalance() }}</span>
+            } @else if (form.get('amount')?.invalid && form.get('amount')?.touched) {
               <span class="form-error">Enter a positive amount</span>
             }
           </div>
+          @if (selectedBalance() !== null) {
+            <div class="balance-hint">Available balance: {{ selectedBalance() }}</div>
+          }
           <div class="form-group">
             <label class="form-label" for="pricePerToken">Price per Token</label>
             <input id="pricePerToken" type="number" class="form-input" formControlName="pricePerToken" placeholder="10.50" step="0.01" />
@@ -111,26 +117,53 @@ export class MarketplaceSellComponent implements OnInit {
   private readonly route = inject(ActivatedRoute);
   readonly walletService = inject(WalletService);
 
-  readonly bonds = signal<Bond[]>([]);
+  readonly bonds = signal<HeldBond[]>([]);
+  readonly selectedBalance = signal<number | null>(null);
   readonly submitting = signal(false);
   readonly error = signal('');
 
   form: FormGroup = this.fb.group({
     bondId: [null, Validators.required],
-    amount: [null, [Validators.required, Validators.min(1)]],
+    amount: [null, [Validators.required, Validators.min(1), this.amountWithinBalanceValidator()]],
     pricePerToken: [null, [Validators.required, Validators.min(0.01)]],
     quoteAsset: ['USDC', Validators.required],
     expiresAfterSeconds: [604800],
   });
 
   ngOnInit(): void {
+    this.form.get('bondId')?.valueChanges.subscribe((bondId) => {
+      this.updateSelectedBalance(bondId);
+      this.form.get('amount')?.updateValueAndValidity();
+    });
+
     const bondIdParam = this.route.snapshot.queryParamMap.get('bondId');
     if (bondIdParam) {
       this.form.patchValue({ bondId: Number(bondIdParam) });
     }
-    this.apiService.getBonds(1, 100).subscribe({
-      next: (res) => this.bonds.set(res.data),
+    const walletAddress = this.walletService.address();
+    if (!walletAddress) return;
+    this.apiService.getHeldBonds(walletAddress).subscribe({
+      next: (bonds) => {
+        this.bonds.set(bonds);
+        this.updateSelectedBalance(this.form.get('bondId')?.value);
+        this.form.get('bondId')?.updateValueAndValidity();
+        this.form.get('amount')?.updateValueAndValidity();
+      },
     });
+  }
+
+  private amountWithinBalanceValidator(): ValidatorFn {
+    return (control: AbstractControl): ValidationErrors | null => {
+      const balance = this.selectedBalance();
+      return balance !== null && Number(control.value) > balance
+        ? { exceedsBalance: true }
+        : null;
+    };
+  }
+
+  private updateSelectedBalance(bondId: unknown): void {
+    const heldBond = this.bonds().find((bond) => bond.id === Number(bondId));
+    this.selectedBalance.set(heldBond?.balance ?? null);
   }
 
   onSubmit(): void {
@@ -146,7 +179,7 @@ export class MarketplaceSellComponent implements OnInit {
         this.router.navigate(['/marketplace']);
       },
       error: (err) => {
-        this.error.set(err.error?.detail || err.message || 'Failed to list tokens');
+        this.error.set(appErrorMessage(err, 'Failed to list tokens'));
         this.submitting.set(false);
       },
     });
