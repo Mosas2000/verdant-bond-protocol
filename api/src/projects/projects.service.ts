@@ -10,6 +10,7 @@ import { CreateProjectDto } from './dto/create-project.dto';
 import { ProjectResponse, ProjectStatusEnum, DocumentUploadResponse } from './interfaces/project.interface';
 import { encodeCid, decodeCid, toBigIntString } from '../common/utils';
 import { ConfigService } from '../config/config.service';
+import { validateGeoJsonBoundary } from './utils/geojson-validator';
 import * as crypto from 'crypto';
 
 
@@ -27,6 +28,20 @@ export class ProjectsService {
   ) {}
 
   async register(dto: CreateProjectDto, ownerAddress: string): Promise<ProjectResponse> {
+    let boundaryData: Record<string, any> = {};
+    if (dto.boundary) {
+      try {
+        const validation = validateGeoJsonBoundary(dto.boundary, dto.totalAreaHa);
+        boundaryData = {
+          boundary: validation.geometry,
+          boundaryHash: validation.boundaryHash,
+          boundaryAreaHa: validation.areaHa,
+        };
+      } catch (err: any) {
+        throw new BadRequestException(`Geospatial boundary validation failed: ${err.message}`);
+      }
+    }
+
     const metadata = {
       name: dto.name,
       methodology: dto.methodology,
@@ -37,6 +52,7 @@ export class ProjectsService {
       blueCarbon: dto.blueCarbon ?? false,
       biodiversityCorridor: dto.biodiversityCorridor ?? false,
       description: dto.description ?? '',
+      ...boundaryData,
       timestamp: new Date().toISOString(),
     };
 
