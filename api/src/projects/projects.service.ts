@@ -143,7 +143,7 @@ export class ProjectsService {
     const gatewayUrls: string[] = [];
 
     for (const file of files) {
-      const result = await this.ipfsService.uploadFile(file.buffer, file.originalname);
+      const result = await this.ipfsService.uploadFile(file.buffer, file.originalname, file.mimetype);
       documentHashes.push(result.hash);
       gatewayUrls.push(result.gatewayUrl);
     }

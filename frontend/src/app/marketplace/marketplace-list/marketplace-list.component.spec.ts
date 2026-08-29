@@ -13,8 +13,8 @@ const ORDER: Order = {
   id: 1,
   seller: 'GBOB',
   bondId: 3,
-  amount: 20,
-  pricePerToken: 10,
+  amount: '20',
+  pricePerToken: '10',
   quoteAsset: 'USDC',
   status: 'Open',
   createdAt: new Date().toISOString(),
@@ -22,7 +22,7 @@ const ORDER: Order = {
 
 const META = { page: 1, limit: 20, total: 1, totalPages: 1 };
 
-const FRESH_ORDER: Order = { ...ORDER, status: 'Filled', amount: 5 };
+const FRESH_ORDER: Order = { ...ORDER, status: 'Filled', amount: '5' };
 
 describe('MarketplaceListComponent', () => {
   let component: MarketplaceListComponent;
@@ -32,6 +32,7 @@ describe('MarketplaceListComponent', () => {
     getOrders: jasmine.Spy;
     buyBondTokens: jasmine.Spy;
     getQuoteBalance: jasmine.Spy;
+    getWalletBalance: jasmine.Spy;
   };
   let walletService: {
     isConnected: ReturnType<typeof signal<boolean>>;
@@ -45,6 +46,11 @@ describe('MarketplaceListComponent', () => {
       buyBondTokens: jasmine.createSpy('buyBondTokens').and.returnValue(of(undefined)),
       getQuoteBalance: jasmine
         .createSpy('getQuoteBalance')
+        .and.callFake((asset: string) =>
+          of({ address: 'GALICE', asset, balance: asset === 'USDC' ? 100 : 0 }),
+        ),
+      getWalletBalance: jasmine
+        .createSpy('getWalletBalance')
         .and.callFake((asset: string) =>
           of({ address: 'GALICE', asset, balance: asset === 'USDC' ? 100 : 0 }),
         ),
@@ -148,7 +154,7 @@ describe('MarketplaceListComponent', () => {
 
       component.refreshOrders();
       expect(component.orders()[0].status).toBe('Filled');
-      expect(component.orders()[0].amount).toBe(5);
+      expect(component.orders()[0].amount).toBe('5');
     });
 
     it('updates the UI with fresh order data after a refresh', () => {

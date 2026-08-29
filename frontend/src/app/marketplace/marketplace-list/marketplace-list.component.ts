@@ -10,8 +10,12 @@ import { WalletService } from '../../auth/wallet.service';
 import { StatusBadgeComponent } from '../../shared/components/status-badge/status-badge.component';
 import { LoadingSpinnerComponent } from '../../shared/components/loading-spinner/loading-spinner.component';
 import { QuoteBalanceComponent, QuoteBalances } from '../../shared/components/quote-balance/quote-balance.component';
-import { Order, Bond, QuoteAsset } from '../../shared/interfaces/bond.interface';
+import { Order, Bond, QuoteAsset, PaginatedResponse } from '../../shared/interfaces/bond.interface';
 import { appErrorMessage } from '../../shared/errors/api-error';
+
+export const ORDERS_RETRY_COUNT = 3;
+export const ORDERS_RETRY_BASE_DELAY_MS = 1000;
+export const ORDERS_RETRY_MAX_DELAY_MS = 8000;
 
 @Component({
   selector: 'app-marketplace-list',
@@ -264,7 +268,7 @@ export class MarketplaceListComponent implements OnInit, OnDestroy {
     });
     const result: Record<number, { best: number; average: number }> = {};
     grouped.forEach((list, bondId) => {
-      const prices = list.map(o => o.pricePerToken);
+      const prices = list.map(o => Number(o.pricePerToken));
       result[bondId] = {
         best: Math.min(...prices),
         average: prices.reduce((a, b) => a + b, 0) / prices.length,
@@ -389,7 +393,7 @@ export class MarketplaceListComponent implements OnInit, OnDestroy {
     if (!this.buyAmount || this.buyAmount < 1 || !this.buyMaxPrice || this.buyMaxPrice <= 0) return null;
 
     const asset = order.quoteAsset;
-    const required = this.buyAmount * order.pricePerToken;
+    const required = this.buyAmount * Number(order.pricePerToken);
     const available = this.balances()[asset] ?? 0;
     return {
       required,

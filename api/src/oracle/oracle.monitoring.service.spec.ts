@@ -55,7 +55,15 @@ describe('OracleMonitoringService', () => {
         { provide: ProjectsService, useValue: projectsService },
         { provide: OracleService, useValue: oracleService },
         { provide: OracleIncidentRepository, useValue: incidentRepository },
-        { provide: RedisService, useValue: { get: jest.fn(), setEx: jest.fn(), del: jest.fn() } },
+        {
+          provide: RedisService,
+          useValue: {
+            get: jest.fn().mockResolvedValue(null),
+            set: jest.fn().mockResolvedValue(undefined),
+            setEx: jest.fn().mockResolvedValue(undefined),
+            del: jest.fn().mockResolvedValue(undefined),
+          },
+        },
       ],
     }).compile();
 

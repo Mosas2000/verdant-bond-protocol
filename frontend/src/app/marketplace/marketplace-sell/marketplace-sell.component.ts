@@ -5,7 +5,7 @@ import { AbstractControl, FormBuilder, FormGroup, ReactiveFormsModule, Validatio
 import { ApiService } from '../../shared/services/api.service';
 import { WalletService } from '../../auth/wallet.service';
 import { QuoteBalanceComponent } from '../../shared/components/quote-balance/quote-balance.component';
-import { Bond } from '../../shared/interfaces/bond.interface';
+import { HeldBond } from '../../shared/interfaces/bond.interface';
 import { appErrorMessage } from '../../shared/errors/api-error';
 
 @Component({
@@ -163,7 +163,7 @@ export class MarketplaceSellComponent implements OnInit {
 
   private updateSelectedBalance(bondId: unknown): void {
     const heldBond = this.bonds().find((bond) => bond.id === Number(bondId));
-    this.selectedBalance.set(heldBond?.balance ?? null);
+    this.selectedBalance.set(heldBond?.balance != null ? Number(heldBond.balance) : null);
   }
 
   onSubmit(): void {

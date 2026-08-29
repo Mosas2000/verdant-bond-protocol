@@ -10,6 +10,14 @@ import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { ConfigService } from '../config/config.service';
 import { OrderStatus } from './interfaces/marketplace.interface';
 
+const configProvider = {
+  provide: ConfigService,
+  useValue: {
+    getDexRouterAddress: jest.fn().mockReturnValue(''),
+  },
+};
+
+
 // ---------------------------------------------------------------------------
 // Minimal in-memory Redis stub used by cache-staleness tests.
 // Implements only the methods DexService calls, plus delPattern.
@@ -97,10 +105,7 @@ describe('DexService', () => {
           provide: SigningKeyProvider,
           useValue: { adminSecret: jest.fn().mockReturnValue('SADMIN') },
         },
-        {
-          provide: ConfigService,
-          useValue: { getDexRouterAddress: jest.fn().mockReturnValue('GDEXROUTERADDRESS') },
-        },
+        configProvider,
       ],
     }).compile();
 
@@ -430,10 +435,7 @@ describe('DexService — cache staleness (in-memory Redis)', () => {
           provide: SigningKeyProvider,
           useValue: { adminSecret: jest.fn().mockReturnValue('SADMIN') },
         },
-        {
-          provide: ConfigService,
-          useValue: { getDexRouterAddress: jest.fn().mockReturnValue('GDEXROUTERADDRESS') },
-        },
+        configProvider,
       ],
     }).compile();
 
