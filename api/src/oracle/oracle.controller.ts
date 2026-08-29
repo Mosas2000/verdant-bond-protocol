@@ -12,6 +12,7 @@ import { ListOracleIncidentsDto } from './dto/list-oracle-incidents.dto';
 import { ResolveOracleIncidentDto } from './dto/resolve-oracle-incident.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { AdminGuard } from '../common/guards/admin.guard';
+import { RateLimit } from '../common/decorators/rate-limit.decorator';
 import {
   ReportResponse,
   ChallengeResponse,
@@ -31,6 +32,7 @@ export class OracleController {
   ) {}
 
   @Post('reports')
+  @RateLimit({ type: 'oracle' })
   @HttpCode(HttpStatus.CREATED)
   async submitReport(
     @Body() dto: SubmitReportDto,
@@ -48,6 +50,7 @@ export class OracleController {
   }
 
   @Post('challenge/:reportId')
+  @RateLimit({ type: 'oracle' })
   @HttpCode(HttpStatus.OK)
   async challengeReport(
     @Param('reportId', ParseIntPipe) reportId: number,
@@ -59,6 +62,7 @@ export class OracleController {
   }
 
   @Post('providers')
+  @RateLimit({ type: 'oracle' })
   @HttpCode(HttpStatus.CREATED)
   async registerProvider(@Body() dto: RegisterProviderDto): Promise<ProviderResponse> {
     return this.oracleService.registerProvider(dto);

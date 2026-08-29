@@ -10,6 +10,7 @@ import { BuyBondDto } from './dto/buy-bond.dto';
 import { DepositQuoteDto } from './dto/deposit-quote.dto';
 import { WithdrawQuoteDto } from './dto/withdraw-quote.dto';
 import { QuoteBalanceQueryDto } from './dto/quote-balance-query.dto';
+import { RateLimit } from '../common/decorators/rate-limit.decorator';
 import {
   OrderResponse,
   PriceFeedResponse,
@@ -20,6 +21,7 @@ import {
 } from './interfaces/marketplace.interface';
 import { PaginatedResponse, PaginationDto } from '../common/dto/pagination.dto';
 import { toBigIntString } from '../common/utils';
+import { listSupportedQuoteAssets, QuoteAssetConfig } from './quote-assets';
 
 @Controller('marketplace')
 export class MarketplaceController {
@@ -28,6 +30,15 @@ export class MarketplaceController {
     private readonly liquidityService: LiquidityService,
     private readonly stellarService: StellarService,
   ) {}
+
+  /**
+   * The canonical quote asset registry (issue #92). The frontend fetches
+   * this instead of hardcoding its own asset list, so the two never drift.
+   */
+  @Get('quote-assets')
+  listQuoteAssets(): readonly QuoteAssetConfig[] {
+    return listSupportedQuoteAssets();
+  }
 
   @Get('orders')
   async listOrders(
@@ -44,6 +55,7 @@ export class MarketplaceController {
   }
 
   @Post('list')
+  @RateLimit({ type: 'mutation' })
   @HttpCode(HttpStatus.CREATED)
   async listBondTokens(
     @Body() dto: ListBondDto,
@@ -54,6 +66,7 @@ export class MarketplaceController {
   }
 
   @Post('buy')
+  @RateLimit({ type: 'mutation' })
   @HttpCode(HttpStatus.OK)
   async buyBondTokens(
     @Body() dto: BuyBondDto,
@@ -84,6 +97,7 @@ export class MarketplaceController {
   }
 
   @Post('deposit')
+  @RateLimit({ type: 'mutation' })
   @HttpCode(HttpStatus.OK)
   async depositQuote(
     @Body() dto: DepositQuoteDto,
@@ -94,6 +108,7 @@ export class MarketplaceController {
   }
 
   @Post('withdraw')
+  @RateLimit({ type: 'mutation' })
   @HttpCode(HttpStatus.OK)
   async withdrawQuote(
     @Body() dto: WithdrawQuoteDto,
@@ -104,6 +119,7 @@ export class MarketplaceController {
   }
 
   @Delete('orders/:id')
+  @RateLimit({ type: 'mutation' })
   @HttpCode(HttpStatus.NO_CONTENT)
   async cancelOrder(
     @Param('id', ParseIntPipe) id: number,

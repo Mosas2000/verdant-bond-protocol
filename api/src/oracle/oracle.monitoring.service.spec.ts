@@ -5,6 +5,7 @@ import { OracleService } from './oracle.service';
 import { OracleIncidentRepository } from './oracle-incident.repository';
 import { ReportStatus } from './interfaces/oracle.interface';
 import { OracleIncidentSeverity, OracleIncidentStatus, OracleIncidentSubjectType } from './interfaces/oracle-incident.interface';
+import { RedisService } from '../common/services/redis.service';
 
 const NOW = Date.UTC(2026, 0, 1, 0, 0, 0);
 const DAY = 24 * 60 * 60 * 1000;
@@ -54,6 +55,7 @@ describe('OracleMonitoringService', () => {
         { provide: ProjectsService, useValue: projectsService },
         { provide: OracleService, useValue: oracleService },
         { provide: OracleIncidentRepository, useValue: incidentRepository },
+        { provide: RedisService, useValue: { get: jest.fn(), setEx: jest.fn(), del: jest.fn() } },
       ],
     }).compile();
 
