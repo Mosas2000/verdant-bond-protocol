@@ -23,3 +23,19 @@ export interface DocumentUploadResponse {
   documentHashes: string[];
   gatewayUrls: string[];
 }
+
+export type ProvenanceEventType = 'registration' | 'review' | 'report' | 'bond' | 'document';
+
+export interface ProvenanceEvent {
+  type: ProvenanceEventType;
+  occurredAt: string | null;
+  title: string;
+  status: 'complete' | 'pending' | 'stale';
+  reference?: string;
+  evidenceUrl?: string;
+}
+
+export interface ProjectProvenanceResponse {
+  projectId: number;
+  events: ProvenanceEvent[];
+}

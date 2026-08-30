@@ -5,7 +5,7 @@ import { AuthService } from '../../auth/auth.service';
 import { WalletService } from '../../auth/wallet.service';
 import { AdminIntentService, SignedAdminIntent } from './admin-intent.service';
 import {
-  Bond, HeldBond, Project, Order, PaginatedResponse,
+  Bond, HeldBond, Project, ProjectProvenance, Order, PaginatedResponse,
   SubscriptionResponse, CreateProjectDto, CreateBondDto, OrderQueryParams, ListBondDto, BuyBondDto,
   ClaimCreditsResponse, TransferResponse,
   UndistributedTotalResponse, SweepUndistributedResponse,
@@ -213,6 +213,10 @@ export class ApiService {
     return this.withProblemDetails(this.http.get<Project>(`/api/projects/${id}`));
   }
 
+  getProjectProvenance(id: number): Observable<ProjectProvenance> {
+    return this.withProblemDetails(this.http.get<ProjectProvenance>(`/api/projects/${id}/provenance`));
+  }
+
   registerProject(data: CreateProjectDto): Observable<Project> {
     return this.withProblemDetails(this.http.post<Project>('/api/projects', data, { headers: this.headers() }));
   }
@@ -227,6 +231,12 @@ export class ApiService {
     if (refresh) queryParams = queryParams.set('_t', Date.now());
     return this.withProblemDetails(this.http.get<PaginatedResponse<Order>>('/api/marketplace/orders', {
       params: queryParams, headers: this.headers(),
+    }));
+  }
+
+  getOrder(id: number): Observable<Order> {
+    return this.withProblemDetails(this.http.get<Order>(`/api/marketplace/orders/${id}`, {
+      params: new HttpParams().set('_t', Date.now()),
     }));
   }
 

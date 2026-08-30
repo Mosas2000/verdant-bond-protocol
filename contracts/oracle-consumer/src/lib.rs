@@ -280,6 +280,29 @@ impl OracleConsumer {
             }
         }
 
+        // Reporting windows are half-open: [period_start, period_end). This
+        // permits adjacent reports while rejecting exact and partial overlap
+        // from the same provider/methodology for the same project.
+        let existing_ids: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProjectReports(project_id.clone()))
+            .unwrap_or(vec![&env]);
+        for existing_id in existing_ids.iter() {
+            let existing: Report = env
+                .storage()
+                .instance()
+                .get(&DataKey::Report(existing_id))
+                .ok_or(OracleError::ReportNotFound)?;
+            if existing.provider == provider
+                && existing.methodology == methodology
+                && period_start < existing.period_end
+                && existing.period_start < period_end
+            {
+                return Err(OracleError::OverlappingReportPeriod);
+            }
+        }
+
         let count: u64 = env
             .storage()
             .instance()
@@ -996,6 +1019,38 @@ mod test {
         let project_reports = client.get_project_reports(&project_id);
         assert_eq!(project_reports.len(), 1);
         assert_eq!(project_reports.get(0).unwrap(), report_id);
+    }
+
+    #[test]
+    fn test_report_period_overlap_rules() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let provider = Address::generate(&env);
+        let project_id = create_project_id(&env, 7);
+        let methodology = Symbol::new(&env, "verra_vcs");
+        let contract_id = env.register(OracleConsumer, (admin.clone(),));
+        let client = OracleConsumerClient::new(&env, &contract_id);
+        client.register_provider(&admin, &provider, &methodology, &0);
+        client.submit_report(
+            &provider, &project_id, &1000, &2000, &100, &BiodiversityMetrics::Absent,
+            &methodology, &make_ipfs_hash(&env, 1), &0,
+        );
+
+        for (start, end) in [(1000u64, 2000u64), (1500, 2500)] {
+            let result = client.try_submit_report(
+                &provider, &project_id, &start, &end, &100, &BiodiversityMetrics::Absent,
+                &methodology, &make_ipfs_hash(&env, 2), &1,
+            );
+            assert_eq!(result, Err(Ok(OracleError::OverlappingReportPeriod)));
+        }
+
+        // Half-open windows allow an adjacent period.
+        let adjacent = client.submit_report(
+            &provider, &project_id, &2000, &3000, &100, &BiodiversityMetrics::Absent,
+            &methodology, &make_ipfs_hash(&env, 3), &1,
+        );
+        assert_eq!(adjacent, 2);
     }
 
     #[test]

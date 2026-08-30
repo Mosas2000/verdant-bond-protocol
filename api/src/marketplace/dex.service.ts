@@ -124,6 +124,16 @@ export class DexService {
   async buyBondTokens(dto: BuyBondDto, buyerAddress: string): Promise<OrderResponse> {
     const order = await this.fetchOrderFromLedger(dto.orderId);
     this.assertOrderIsActionable(order);
+    if (BigInt(dto.amount) > BigInt(order.amount)) {
+      throw new ConflictException(
+        `Stale quote: requested ${dto.amount} tokens but only ${order.amount} remain. Refresh and review the updated quote.`,
+      );
+    }
+    if (BigInt(dto.maxPrice) < BigInt(order.pricePerToken)) {
+      throw new ConflictException(
+        `Stale price: current price ${order.pricePerToken} exceeds your maximum ${dto.maxPrice}. Refresh and approve a new maximum.`,
+      );
+    }
     const proceeds = BigInt(order.pricePerToken) * BigInt(dto.amount);
 
     const escrowed = await this.getQuoteBalance(buyerAddress, order.quoteAsset);

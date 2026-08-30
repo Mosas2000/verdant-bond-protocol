@@ -460,6 +460,30 @@ describe('DexService', () => {
       await expect(service.cancelOrder(9, SELLER)).rejects.toMatchObject({ status: 409 });
     });
 
+    it('rejects a stale price before invoking the purchase contract', async () => {
+      simulateCallMock.mockImplementation(({ method, args }: { method: string; args: any[] }) =>
+        method === 'get_order'
+          ? Promise.resolve(buildOrderScVal({ id: Number(scValToNative(args[0])), statusIndex: 0, expiresAt: FUTURE_EXPIRY }))
+          : Promise.reject(new Error(`unexpected: ${method}`)),
+      );
+
+      await expect(service.buyBondTokens({ orderId: 10, amount: 10, maxPrice: 9 } as any, BUYER))
+        .rejects.toMatchObject({ status: 409 });
+      expect(invokeContractMethodMock).not.toHaveBeenCalled();
+    });
+
+    it('rejects a partial-depth change before invoking the purchase contract', async () => {
+      simulateCallMock.mockImplementation(({ method, args }: { method: string; args: any[] }) =>
+        method === 'get_order'
+          ? Promise.resolve(buildOrderScVal({ id: Number(scValToNative(args[0])), statusIndex: 1, expiresAt: FUTURE_EXPIRY }))
+          : Promise.reject(new Error(`unexpected: ${method}`)),
+      );
+
+      await expect(service.buyBondTokens({ orderId: 11, amount: 101, maxPrice: 10 } as any, BUYER))
+        .rejects.toMatchObject({ status: 409 });
+      expect(invokeContractMethodMock).not.toHaveBeenCalled();
+    });
+
     it('decodeOrder reports Expired once the wall clock passes expires_at, even though the raw status index is still Open', () => {
       const pastExpiry = BigInt(Math.floor(Date.now() / 1000) - 1);
       const raw = [BigInt(10), SELLER, BigInt(1), BigInt(100), BigInt(10), 'USDC', 0, BigInt(1700000000), pastExpiry];

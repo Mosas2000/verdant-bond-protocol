@@ -14,6 +14,9 @@ import {
   SlashRecord,
   ChallengeRecord,
   ReportStatus,
+  ChallengeStateResponse,
+  ChallengedReportSummary,
+  CouponEligibility,
 } from './interfaces/oracle.interface';
 import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
@@ -214,6 +217,20 @@ async submitReport(dto: SubmitReportDto, providerAddress: string): Promise<Repor
     const blocking = reports.filter(
       (r) => r.status === ReportStatus.Challenged || r.status === ReportStatus.Rejected,
     );
+    const conflictingIds = new Set<number>();
+    for (let i = 0; i < reports.length; i += 1) {
+      for (let j = i + 1; j < reports.length; j += 1) {
+        const left = reports[i];
+        const right = reports[j];
+        if (left.providerAddress === right.providerAddress
+          && left.methodology === right.methodology
+          && left.periodStart < right.periodEnd
+          && right.periodStart < left.periodEnd) {
+          conflictingIds.add(left.id);
+          conflictingIds.add(right.id);
+        }
+      }
+    }
 
     if (!hasVerified) {
       reasons.push('No verified oracle report exists for this project');
@@ -224,8 +241,12 @@ async submitReport(dto: SubmitReportDto, providerAddress: string): Promise<Repor
       );
       blockedByReportIds.push(...blocking.map((r) => r.id));
     }
+    if (conflictingIds.size > 0) {
+      reasons.push('Overlapping oracle report periods must be resolved before coupon distribution');
+      blockedByReportIds.push(...conflictingIds);
+    }
 
-    const eligible = hasVerified && blocking.length === 0;
+    const eligible = hasVerified && blocking.length === 0 && conflictingIds.size === 0;
     if (!eligible && reasons.length === 0) {
       reasons.push('Coupon distribution is not eligible for this project');
     }

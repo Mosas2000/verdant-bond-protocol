@@ -117,6 +117,10 @@ export const ORDERS_POLL_INTERVAL_MS = 15000;
                               <div class="buy-form">
                                 <input type="number" class="buy-input" placeholder="Amount" [(ngModel)]="buyAmount" min="1" />
                                 <input type="number" class="buy-input" placeholder="Max price" [(ngModel)]="buyMaxPrice" min="0.01" />
+                                <div class="quote-summary">
+                                  Current quote: {{ order.pricePerToken }} {{ order.quoteAsset }} / token ·
+                                  max slippage: {{ maxSlippagePercent(order) | number:'1.0-2' }}%
+                                </div>
                                 @if (buyRequirement(order); as req) {
                                   <div class="buy-requirement">
                                     @if (req.sufficient) {
@@ -244,6 +248,7 @@ export const ORDERS_POLL_INTERVAL_MS = 15000;
     .buy-input { padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.8125rem; outline: none; width: 100%; }
     .buy-input:focus { border-color: #3b82f6; }
     .buy-actions { display: flex; gap: 4px; }
+    .quote-summary { color: #4b5563; font-size: 0.75rem; }
     .buy-requirement { display: flex; flex-direction: column; gap: 6px; font-size: 0.75rem; padding: 8px; border-radius: 6px; }
     .sufficient-msg { color: #22c55e; }
     .insufficient-msg { color: #ef4444; }
@@ -452,6 +457,13 @@ export class MarketplaceListComponent implements OnInit, OnDestroy {
     return this.buyRequirement(order)?.sufficient ?? false;
   }
 
+  maxSlippagePercent(order: Order): number {
+    const current = Number(order.pricePerToken);
+    return current > 0 && this.buyMaxPrice >= current
+      ? ((this.buyMaxPrice - current) / current) * 100
+      : 0;
+  }
+
   focusQuotePanel(): void {
     document.getElementById('quote-balance')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
@@ -462,11 +474,27 @@ export class MarketplaceListComponent implements OnInit, OnDestroy {
     this.buySubmitting.set(true);
     this.buyError.set('');
 
-    this.apiService.buyBondTokens({
-      orderId: order.id,
-      amount: this.buyAmount,
-      maxPrice: this.buyMaxPrice,
-    }).subscribe({
+    const requestedAmount = this.buyAmount;
+    const approvedMaxPrice = this.buyMaxPrice;
+    this.apiService.getOrder(order.id).pipe(
+      switchMap((current) => {
+        this.orders.update((orders) => orders.map((item) => item.id === current.id ? current : item));
+        if (current.status !== 'Open' && current.status !== 'PartiallyFilled') {
+          throw new Error(`Order is no longer available (${current.status}).`);
+        }
+        if (requestedAmount > Number(current.amount)) {
+          throw new Error(`Stale quote: only ${current.amount} tokens remain.`);
+        }
+        if (Number(current.pricePerToken) > approvedMaxPrice) {
+          throw new Error(`Stale price: current price ${current.pricePerToken} exceeds your maximum ${approvedMaxPrice}.`);
+        }
+        return this.apiService.buyBondTokens({
+          orderId: current.id,
+          amount: requestedAmount,
+          maxPrice: approvedMaxPrice,
+        });
+      }),
+    ).subscribe({
       next: () => {
         this.buyOrderId.set(null);
         this.buySubmitting.set(false);

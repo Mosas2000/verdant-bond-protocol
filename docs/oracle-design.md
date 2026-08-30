@@ -191,3 +191,9 @@ log-based staleness alerting described in
 - Signature threshold defaults to two independent qualifying sources, with minimum verifier stake required for provider votes
 - Coupon distributions consume only `Verified` reports (enforced by `CouponEngine`); reports in `Challenged` status are rejected, holding coupons in escrow during disputes
 - Multi-sig for high-value reports
+# Report period conflicts
+
+Report periods use half-open intervals (`[period_start, period_end)`). For a
+given project, provider, and methodology, exact or partial overlaps are
+rejected on-chain; adjacent periods are valid. Coupon eligibility also rejects legacy/indexed data
+that contains overlapping periods.

@@ -7,7 +7,7 @@ import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { nativeToScVal, scValToNative, Address, xdr } from '@stellar/stellar-sdk';
 import { CreateProjectDto } from './dto/create-project.dto';
-import { ProjectResponse, ProjectStatusEnum, DocumentUploadResponse } from './interfaces/project.interface';
+import { ProjectResponse, ProjectStatusEnum, DocumentUploadResponse, ProjectProvenanceResponse, ProvenanceEvent } from './interfaces/project.interface';
 import { encodeCid, decodeCid, toBigIntString } from '../common/utils';
 import { ConfigService } from '../config/config.service';
 import { validateGeoJsonBoundary } from './utils/geojson-validator';
@@ -171,6 +171,42 @@ export class ProjectsService {
     return { projectId: id, documentHashes, gatewayUrls };
   }
 
+  async getProvenance(id: number): Promise<ProjectProvenanceResponse> {
+    const snapshot = await this.exportProject(id, 'system');
+    const project = await this.findOne(id);
+    const events: ProvenanceEvent[] = [{
+      type: 'registration',
+      occurredAt: project.createdAt,
+      title: 'Project registered',
+      status: 'complete',
+      reference: project.metadataIpfsHash,
+      evidenceUrl: `https://gateway.pinata.cloud/ipfs/${project.metadataIpfsHash}`,
+    }];
+    if (project.status === ProjectStatusEnum.Pending) {
+      events.push({ type: 'review', occurredAt: null, title: 'Review pending', status: 'pending' });
+    } else {
+      events.push({ type: 'review', occurredAt: null, title: `Project ${project.status.toLowerCase()}`, status: 'complete' });
+    }
+    for (const report of snapshot.reports) {
+      const reportStatus = report.status === 'Pending' || report.status === 0
+        ? 'pending'
+        : report.ipfsEvidenceHash ? 'complete' : 'stale';
+      events.push({
+        type: 'report', occurredAt: report.createdAt ?? null,
+        title: `Oracle report #${report.id}`, status: reportStatus,
+        reference: String(report.id), evidenceUrl: report.ipfsEvidenceHash ? `https://gateway.pinata.cloud/ipfs/${report.ipfsEvidenceHash}` : undefined,
+      });
+    }
+    for (const bondId of snapshot.relatedBonds) {
+      events.push({ type: 'bond', occurredAt: null, title: `Bond #${bondId} issued`, status: 'complete', reference: String(bondId), evidenceUrl: `/bonds/${bondId}` });
+    }
+    for (const hash of snapshot.documents) {
+      events.push({ type: 'document', occurredAt: null, title: 'Project document added', status: 'complete', reference: hash, evidenceUrl: `https://gateway.pinata.cloud/ipfs/${hash}` });
+    }
+    events.sort((a, b) => (a.occurredAt && b.occurredAt ? a.occurredAt.localeCompare(b.occurredAt) : a.occurredAt ? -1 : b.occurredAt ? 1 : 0));
+    return { projectId: id, events };
+  }
+
   private async buildProjectResponse(id: number): Promise<ProjectResponse> {
     const projectScVal = await this.contractService.simulateCall({
       contractAddress: this.configService.getProjectRegistryAddress(), method: 'get_project',
@@ -195,7 +231,7 @@ export class ProjectsService {
       ownerAddress: (project[1] as any).toString?.() || '',
       totalAreaHa: metadata.totalAreaHa || 0,
       carbonSequestrationEstimate: metadata.carbonSequestrationEstimate || 0,
-      createdAt: new Date().toISOString(),
+      createdAt: metadata.timestamp || new Date().toISOString(),
     };
   }
 

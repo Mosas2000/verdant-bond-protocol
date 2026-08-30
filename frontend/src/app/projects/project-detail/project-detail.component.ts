@@ -5,7 +5,8 @@ import { ApiService } from '../../shared/services/api.service';
 import { StatusBadgeComponent } from '../../shared/components/status-badge/status-badge.component';
 import { LoadingSpinnerComponent } from '../../shared/components/loading-spinner/loading-spinner.component';
 import { ChallengedReportsComponent } from '../challenged-reports/challenged-reports.component';
-import { Project } from '../../shared/interfaces/bond.interface';
+import { Project, ProjectProvenanceEvent } from '../../shared/interfaces/bond.interface';
+import { forkJoin } from 'rxjs';
 
 @Component({
   selector: 'app-project-detail',
@@ -58,7 +59,26 @@ import { Project } from '../../shared/interfaces/bond.interface';
           </div>
         </div>
 
-        <app-challenged-reports [projectId]="p.id" />
+        <section class="timeline-card" aria-labelledby="provenance-heading">
+          <h2 id="provenance-heading">Provenance</h2>
+          @if (timeline().length === 0) {
+            <p class="timeline-empty">No provenance events are available yet.</p>
+          } @else {
+            <ol class="timeline">
+              @for (event of timeline(); track $index) {
+                <li>
+                  <span class="timeline-dot" [class.pending]="event.status !== 'complete'"></span>
+                  <div><strong>{{ event.title }}</strong>
+                    <div class="timeline-meta">{{ event.occurredAt ? (event.occurredAt | date:'medium') : event.status }}</div>
+                    @if (event.evidenceUrl) { <a [href]="event.evidenceUrl" target="_blank" rel="noopener noreferrer">View evidence →</a> }
+                  </div>
+                </li>
+              }
+            </ol>
+          }
+        </section>
+
+        <app-challenged-reports [projectId]="'' + p.id" />
       } @else if (loading()) {
         <div class="loading-section"><app-loading-spinner size="lg" /></div>
       } @else if (error()) {
@@ -73,6 +93,13 @@ import { Project } from '../../shared/interfaces/bond.interface';
     .loading-section { display: flex; justify-content: center; padding: 48px 0; }
     .error-card { background: #fef2f2; color: #ef4444; padding: 24px; border-radius: 12px; text-align: center; }
     .detail-card { background: #fff; border-radius: 12px; padding: 32px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+    .timeline-card { margin-top: 24px; background: #fff; border-radius: 12px; padding: 24px 32px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+    .timeline { list-style: none; padding: 0; margin: 20px 0 0; }
+    .timeline li { position: relative; display: grid; grid-template-columns: 18px 1fr; gap: 12px; padding-bottom: 20px; }
+    .timeline-dot { width: 10px; height: 10px; margin-top: 5px; border-radius: 50%; background: #22c55e; }
+    .timeline-dot.pending { background: #f59e0b; }
+    .timeline-meta, .timeline-empty { color: #6b7280; font-size: 0.8125rem; }
+    .timeline a { color: #3b82f6; font-size: 0.8125rem; }
     .detail-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
     .detail-title { font-size: 1.5rem; font-weight: 700; }
     .detail-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
@@ -92,6 +119,7 @@ export class ProjectDetailComponent implements OnInit {
   readonly project = signal<Project | null>(null);
   readonly loading = signal(true);
   readonly error = signal('');
+  readonly timeline = signal<ProjectProvenanceEvent[]>([]);
 
   metadataUrl(): string {
     const p = this.project();
@@ -105,9 +133,10 @@ export class ProjectDetailComponent implements OnInit {
       this.loading.set(false);
       return;
     }
-    this.apiService.getProject(id).subscribe({
-      next: (project) => {
+    forkJoin({ project: this.apiService.getProject(id), provenance: this.apiService.getProjectProvenance(id) }).subscribe({
+      next: ({ project, provenance }) => {
         this.project.set(project);
+        this.timeline.set(provenance.events);
         this.loading.set(false);
       },
       error: (err) => {
