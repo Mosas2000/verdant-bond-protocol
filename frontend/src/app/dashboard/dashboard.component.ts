@@ -4,6 +4,7 @@ import { RouterModule, Router } from '@angular/router';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Observable, EMPTY, defer, timer, Subject, switchMap, takeUntil, retry, tap, finalize, catchError, throwError } from 'rxjs';
 import { ApiService } from '../shared/services/api.service';
+import { WalletService } from '../auth/wallet.service';
 import { BondCardComponent } from '../shared/components/bond-card/bond-card.component';
 import { ProjectCardComponent } from '../shared/components/project-card/project-card.component';
 import { LoadingSpinnerComponent } from '../shared/components/loading-spinner/loading-spinner.component';
@@ -75,6 +76,65 @@ type SectionState = 'loading' | 'error' | 'empty' | 'ready';
               <div class="stat-card">
                 <span class="stat-label">Carbon Sequestration</span>
                 <span class="stat-value">{{ carbonTotal() | number }} tCO₂e</span>
+              </div>
+            </div>
+          }
+        }
+      </section>
+
+      <section class="section">
+        <div class="section-header">
+          <h2>My Portfolio</h2>
+          <div class="header-actions">
+            @if (portfolioState() === 'error') {
+              <button class="btn btn-sm btn-outline" (click)="retryPortfolio()">Retry</button>
+            }
+            @if (walletService.address()) {
+              <button class="btn btn-sm btn-outline" (click)="refreshPortfolio()">Refresh</button>
+            }
+          </div>
+        </div>
+
+        @switch (portfolioState()) {
+          @case ('loading') {
+            <div class="stats-grid stats-skeleton" aria-busy="true" aria-label="Loading portfolio">
+              @for (s of [1, 2, 3, 4]; track s) {
+                <div class="stat-card skeleton"><span class="skeleton-block"></span><span class="skeleton-block short"></span></div>
+              }
+            </div>
+          }
+          @case ('error') {
+            <div class="section-error">
+              <p>{{ portfolioError() }}</p>
+              <button class="btn btn-sm btn-outline" (click)="retryPortfolio()">Try Again</button>
+            </div>
+          }
+          @case ('empty') {
+            <div class="empty-section">
+              <p>Connect your wallet to see your aggregated bond, marketplace, and credit positions.</p>
+            </div>
+          }
+          @case ('ready') {
+            <div class="stats-grid">
+              <div class="stat-card">
+                <span class="stat-label">Bonds Held</span>
+                <span class="stat-value">{{ portfolio()?.bondsHeld?.length ?? 0 }}</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Open Listings</span>
+                <span class="stat-value">{{ portfolio()?.openListings?.length ?? 0 }}</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Claimable Credits</span>
+                <span class="stat-value">{{ portfolio()?.claimableCredits?.length ?? 0 }}</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Retired Credits</span>
+                <span class="stat-value">{{ portfolio()?.retiredCredits?.length ?? 0 }}</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Pending Actions</span>
+                <span class="stat-value">{{ portfolio()?.pendingActions?.length ?? 0 }}</span>
               </div>
             </div>
           }
@@ -193,9 +253,15 @@ type SectionState = 'loading' | 'error' | 'empty' | 'ready';
 export class DashboardComponent implements OnInit, OnDestroy {
   private readonly apiService = inject(ApiService);
   private readonly router = inject(Router);
+  readonly walletService = inject(WalletService);
 
   readonly bonds = signal<Bond[]>([]);
   readonly projects = signal<Project[]>([]);
+
+  // Wallet-scoped aggregate portfolio (#116).
+  readonly portfolio = signal<any | null>(null);
+  readonly portfolioState = signal<SectionState>('loading');
+  readonly portfolioError = signal('');
 
   readonly totalBonds = signal(0);
   readonly activeBonds = signal(0);
@@ -230,6 +296,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
       .subscribe();
     this.loadBonds();
     this.loadProjects();
+    this.loadPortfolio();
   }
 
   ngOnDestroy(): void {
@@ -253,6 +320,26 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   retryAll(): void {
     this.retryOverview();
+    this.loadPortfolio();
+  }
+
+  retryPortfolio(): void {
+    this.loadPortfolio();
+  }
+
+  refreshPortfolio(): void {
+    if (!this.walletService.address()) return;
+    this.portfolioState.set('loading');
+    this.apiService.getPortfolio(undefined, true).subscribe({
+      next: (p) => {
+        this.portfolio.set(p);
+        this.portfolioState.set('ready');
+      },
+      error: () => {
+        this.portfolioError.set('Failed to refresh portfolio');
+        this.portfolioState.set('error');
+      },
+    });
   }
 
   private loadBonds(): void {
@@ -261,6 +348,30 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   private loadProjects(): void {
     this.projectsRefresh$.next();
+  }
+
+  private loadPortfolio(): void {
+    if (!this.walletService.address()) {
+      this.portfolioState.set('empty');
+      return;
+    }
+    this.portfolioState.set('loading');
+    this.portfolioError.set('');
+    defer(() => this.apiService.getPortfolio())
+      .pipe(
+        tap({
+          next: (p) => {
+            this.portfolio.set(p);
+            this.portfolioState.set('ready');
+          },
+          error: () => {
+            this.portfolioError.set(appErrorMessage(this.lastError, 'Failed to load portfolio'));
+            this.portfolioState.set('error');
+          },
+        }),
+        catchError(() => EMPTY),
+      )
+      .subscribe();
   }
 
   private fetchBonds(): Observable<PaginatedResponse<Bond>> {

@@ -5,6 +5,7 @@ import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
 import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
+import { HolderIndexService } from './holder-index.service';
 import { CreateBondDto } from './dto/create-bond.dto';
 import { SubscribeDto } from './dto/subscribe.dto';
 import { DistributeCouponDto } from './dto/distribute-coupon.dto';
@@ -28,7 +29,6 @@ import {
 } from './interfaces/bond.interface';
 import { toBigIntString } from '../common/utils';
 import { ConfigService } from '../config/config.service';
-import { Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 
 const BOND_ERROR_CODE = {
   NotInitialized: 1,
@@ -52,6 +52,7 @@ export class BondsService {
     private readonly redis: RedisService,
     private readonly signingKeys: SigningKeyProvider,
     private readonly configService: ConfigService,
+    private readonly holderIndex: HolderIndexService,
   ) {}
 
   async create(dto: CreateBondDto): Promise<BondResponse> {
@@ -165,26 +166,14 @@ export class BondsService {
     );
 
     await this.redis.del(`bond:${id}`);
-    await this.redis.sAdd(`bond:${id}:holders`, dto.investorAddress);
+    await this.holderIndex.recordSubscribe(id, dto.investorAddress);
+    this.invalidatePortfolio(dto.investorAddress);
 
     return { bondId: id, investorAddress: dto.investorAddress, amount: toBigIntString(dto.amount), transactionHash: transactionHash || '' };
   }
 
   async getHolders(id: number): Promise<HolderListResponse> {
-    const holderAddresses = await this.redis.sMembers(`bond:${id}:holders`);
-    const holders = [];
-
-    for (const address of holderAddresses) {
-      try {
-        const balanceScVal = await this.contractService.simulateCall({
-          contractAddress: this.configService.getBondIssuerAddress(), method: 'get_holder_balance',
-          args: [nativeToScVal(BigInt(id), { type: 'u64' }), Address.fromString(address).toScVal()],
-        });
-        const balance = toBigIntString(scValToNative(balanceScVal));
-        if (balance !== '0') holders.push({ address, balance });
-      } catch {}
-    }
-
+    const holders = await this.holderIndex.getHoldersWithBalances(id);
     return { bondId: id, holders, total: holders.length };
   }
 
@@ -193,7 +182,7 @@ export class BondsService {
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
     const nonce = await this.nonceService.next(this.configService.getCouponEngineAddress(), adminAddress);
 
-    const holderAddresses = await this.redis.sMembers(`bond:${id}:holders`);
+    const holderAddresses = await this.holderIndex.getHoldersForCoupon(id, { requireFresh: true });
 
     const { result } = await this.contractService.invokeContractMethod(
       this.configService.getCouponEngineAddress(), 'distribute_coupon', adminSecret,
@@ -229,6 +218,8 @@ export class BondsService {
       nonce,
     );
 
+    this.invalidatePortfolio(dto.investorAddress);
+
     return {
       bondId: id,
       investorAddress: dto.investorAddress,
@@ -252,7 +243,9 @@ export class BondsService {
       nonce,
     );
 
-    await this.redis.sAdd(`bond:${id}:holders`, dto.toAddress);
+    await this.holderIndex.recordTransfer(id, dto.fromAddress, dto.toAddress);
+    this.invalidatePortfolio(dto.fromAddress);
+    this.invalidatePortfolio(dto.toAddress);
 
     return {
       bondId: id,
@@ -261,6 +254,33 @@ export class BondsService {
       amount: toBigIntString(dto.amount),
       transactionHash: transactionHash || '',
     };
+  }
+
+  /**
+   * Operational repair (#117): reconcile the authoritative holder index for a
+   * single bond against on-chain balances, rediscovering any out-of-band
+   * transfers. Returns the reconciled holder list.
+   */
+  async reconcileBond(id: number): Promise<HolderListResponse> {
+    const holders = await this.holderIndex.reconcileBond(id);
+    return { bondId: id, holders, total: holders.length };
+  }
+
+  /**
+   * Operational repair (#117): reindex every bond against on-chain balances.
+   * Use after Redis loss or when direct contract transfers may have occurred.
+   */
+  async reindexHolders(): Promise<Array<{ bondId: number; total: number }>> {
+    let total = 0;
+    try {
+      const countScVal = await this.contractService.simulateCall({
+        contractAddress: this.configService.getBondIssuerAddress(), method: 'bond_count', args: [],
+      });
+      total = Number(scValToNative(countScVal));
+    } catch {}
+
+    const result = await this.holderIndex.reindexAll(total);
+    return Object.entries(result).map(([bondId, holders]) => ({ bondId: Number(bondId), total: holders.length }));
   }
 
   async getUndistributedTotal(id: number): Promise<UndistributedTotalResponse> {
@@ -273,6 +293,86 @@ export class BondsService {
       bondId: id,
       undistributedTotal: toBigIntString(scValToNative(resultScVal)),
     };
+  }
+
+  /**
+   * Aggregate of claimable coupon credits for a wallet across every bond it
+   * holds. Best-effort: bonds whose coupon engine call fails are skipped so a
+   * single unreadable period cannot blank the whole portfolio view.
+   */
+  async getClaimableCredits(
+    address: string,
+  ): Promise<Array<{ bondId: number; amount: string }>> {
+    try {
+      Address.fromString(address);
+    } catch {
+      throw new BadRequestException('Invalid wallet address');
+    }
+
+    const held = await this.findHeldByAddress(address);
+    const out: Array<{ bondId: number; amount: string }> = [];
+    for (const bond of held) {
+      try {
+        const scVal = await this.contractService.simulateCall({
+          contractAddress: this.configService.getCouponEngineAddress(),
+          method: 'get_claimable_credits',
+          args: [Address.fromString(address).toScVal(), nativeToScVal(BigInt(bond.id), { type: 'u64' })],
+        });
+        const amount = toBigIntString(scValToNative(scVal));
+        if (amount !== '0') out.push({ bondId: bond.id, amount });
+      } catch {}
+    }
+    return out;
+  }
+
+  /**
+   * All credit retirement records belonging to a wallet, used by the portfolio
+   * aggregate view.
+   */
+  async getRetiredCredits(
+    address: string,
+  ): Promise<Array<{ id: number; bondId: number; amount: string; creditType: string; retiredAt: number }>> {
+    try {
+      Address.fromString(address);
+    } catch {
+      throw new BadRequestException('Invalid wallet address');
+    }
+
+    const out: Array<{ id: number; bondId: number; amount: string; creditType: string; retiredAt: number }> = [];
+    try {
+      const countScVal = await this.contractService.simulateCall({
+        contractAddress: this.configService.getCreditRetirementAddress(),
+        method: 'total_retirements',
+        args: [],
+      });
+      const total = Number(scValToNative(countScVal));
+      for (let id = 1; id <= total; id++) {
+        try {
+          const recScVal = await this.contractService.simulateCall({
+            contractAddress: this.configService.getCreditRetirementAddress(),
+            method: 'get_retirement_record',
+            args: [nativeToScVal(BigInt(id), { type: 'u64' })],
+          });
+          const record = scValToNative(recScVal) as any[];
+          const holder = (record[1] as any)?.toString?.() ?? '';
+          if (holder !== address) continue;
+          out.push({
+            id: Number(record[0]),
+            bondId: Number(record[2]),
+            amount: toBigIntString(record[3]),
+            creditType: record[4] as string,
+            retiredAt: Number(record[5]),
+          });
+        } catch {}
+      }
+    } catch {}
+    return out;
+  }
+
+  /** Invalidate the cached portfolio aggregate for a wallet (#116). */
+  private invalidatePortfolio(address: string): void {
+    if (!address) return;
+    this.redis.del(`portfolio:${address}`).catch(() => undefined);
   }
 
   async sweepUndistributed(id: number): Promise<SweepUndistributedResponse> {
@@ -312,6 +412,7 @@ export class BondsService {
     }
 
     await this.redis.del(`bond:${id}`);
+    await this.redis.delPattern('portfolio:*').catch(() => undefined);
     return this.buildBondResponse(id);
   }
 
