@@ -13,6 +13,8 @@ import { ListOracleIncidentsDto } from './dto/list-oracle-incidents.dto';
 import { ResolveOracleIncidentDto } from './dto/resolve-oracle-incident.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { AdminGuard } from '../common/guards/admin.guard';
+import { IntentGuard } from '../common/guards/intent.guard';
+import { RequireIntent } from '../common/decorators/require-intent.decorator';
 import { RateLimit } from '../common/decorators/rate-limit.decorator';
 import {
   ReportResponse,
@@ -101,6 +103,8 @@ export class OracleController {
   }
 
   @Post('providers')
+  @UseGuards(JwtAuthGuard, AdminGuard, IntentGuard)
+  @RequireIntent('register_provider', 'id', 'global')
   @RateLimit({ type: 'oracle' })
   @HttpCode(HttpStatus.CREATED)
   async registerProvider(@Body() dto: RegisterProviderDto): Promise<ProviderResponse> {
@@ -139,7 +143,8 @@ export class OracleController {
   }
 
   @Post('incidents/:id/acknowledge')
-  @UseGuards(JwtAuthGuard, AdminGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard, IntentGuard)
+  @RequireIntent('acknowledge_incident', 'id')
   @HttpCode(HttpStatus.OK)
   async acknowledgeIncident(
     @Param('id') id: string,
@@ -150,7 +155,8 @@ export class OracleController {
   }
 
   @Post('incidents/:id/resolve')
-  @UseGuards(JwtAuthGuard, AdminGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard, IntentGuard)
+  @RequireIntent('resolve_incident', 'id')
   @HttpCode(HttpStatus.OK)
   async resolveIncident(
     @Param('id') id: string,

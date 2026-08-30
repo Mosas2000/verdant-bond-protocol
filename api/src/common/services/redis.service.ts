@@ -150,6 +150,37 @@ export class RedisService {
     }
   }
 
+  /**
+   * Reserve a key only if it does not already exist (Redis `SET ... NX`).
+   *
+   * Used for admin-intent replay protection: a nonce may be consumed exactly
+   * once. Returns true if this call reserved the key (first use), false if it
+   * already existed (replay attempt). The key auto-expires after `seconds`.
+   */
+  async setNx(key: string, seconds: number): Promise<boolean> {
+    try {
+      const result = await this.redis.set(key, '1', { NX: true, EX: seconds });
+      return result === 'OK';
+    } catch (error) {
+      this.logDegraded('setNx', key, error);
+      return false;
+    }
+  }
+
+  /**
+   * Like {@link setNx} but stores an arbitrary string value (used for
+   * idempotency records). Returns true only if the key was newly created.
+   */
+  async setNxValue(key: string, value: string, seconds: number): Promise<boolean> {
+    try {
+      const result = await this.redis.set(key, value, { NX: true, EX: seconds });
+      return result === 'OK';
+    } catch (error) {
+      this.logDegraded('setNxValue', key, error);
+      return false;
+    }
+  }
+
   async ttl(key: string): Promise<number> {
     try {
       return await this.redis.ttl(key);

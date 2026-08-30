@@ -109,6 +109,7 @@ export class DexService {
     const orderId = Number(scValToNative(result));
     await this.redis.delPattern(`orders:*`);
     await this.redis.del(`order:${orderId}`);
+    await this.redis.del(`portfolio:${sellerAddress}`).catch(() => undefined);
     return this.getOrder(orderId);
   }
 
@@ -153,6 +154,7 @@ export class DexService {
 
     await this.redis.delPattern(`orders:*`);
     await this.redis.del(`order:${dto.orderId}`);
+    await this.redis.del(`portfolio:${buyerAddress}`).catch(() => undefined);
     return this.getOrder(dto.orderId);
   }
 
@@ -186,6 +188,7 @@ export class DexService {
 
     await this.redis.delPattern(`orders:*`);
     await this.redis.del(`order:${orderId}`);
+    await this.redis.del(`portfolio:${callerAddress}`).catch(() => undefined);
   }
 
   async getOrder(orderId: number): Promise<OrderResponse> {
@@ -259,6 +262,7 @@ export class DexService {
       nonce,
     );
 
+    await this.redis.del(`portfolio:${callerAddress}`).catch(() => undefined);
     await this.invalidateQuoteBalanceIndex(callerAddress, dto.asset);
 
     return { address: callerAddress, asset: dto.asset, amount: dto.amount, transactionHash };
@@ -281,6 +285,7 @@ export class DexService {
       nonce,
     );
 
+    await this.redis.del(`portfolio:${callerAddress}`).catch(() => undefined);
     await this.invalidateQuoteBalanceIndex(callerAddress, dto.asset);
 
     return { address: callerAddress, asset: dto.asset, amount: dto.amount, transactionHash };

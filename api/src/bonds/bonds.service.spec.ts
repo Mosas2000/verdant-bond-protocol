@@ -26,11 +26,27 @@ import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { ConfigService } from '../config/config.service';
 import { BondStatusEnum, BondMaturityStatusEnum, CreditTypeEnum } from './interfaces/bond.interface';
 
+// The holder index is exercised by its own dedicated spec; here we mock it so
+// BondsService resolves cleanly and coupon distribution falls back to a known
+// holder set.
+jest.mock('./holder-index.service', () => ({
+  HolderIndexService: jest.fn().mockImplementation(() => ({
+    recordSubscribe: jest.fn().mockResolvedValue(undefined),
+    recordTransfer: jest.fn().mockResolvedValue(undefined),
+    getHoldersWithBalances: jest.fn().mockResolvedValue([]),
+    getHoldersForCoupon: jest
+      .fn()
+      .mockResolvedValue(['GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF']),
+    reconcileBond: jest.fn().mockResolvedValue({ bondId: 1, holders: [], total: 0 }),
+  })),
+}));
+
 const configProvider = {
   provide: ConfigService,
   useValue: {
-    getBondIssuerAddress: jest.fn().mockReturnValue(''),
-    getCouponEngineAddress: jest.fn().mockReturnValue(''),
+    getBondIssuerAddress: jest.fn().mockReturnValue('CBONDISSUERADDRESS'),
+    getCouponEngineAddress: jest.fn().mockReturnValue('CCOUPONENGINEADDRESS'),
+    getCreditRetirementAddress: jest.fn().mockReturnValue('CCREDITRETIREMENTADDRESS'),
   },
 };
 

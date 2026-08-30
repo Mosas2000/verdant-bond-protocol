@@ -3,6 +3,7 @@ import { HttpClient, HttpErrorResponse, HttpHeaders, HttpParams } from '@angular
 import { catchError, Observable, throwError } from 'rxjs';
 import { AuthService } from '../../auth/auth.service';
 import { WalletService } from '../../auth/wallet.service';
+import { AdminIntentService, SignedAdminIntent } from './admin-intent.service';
 import {
   Bond, HeldBond, Project, Order, PaginatedResponse,
   SubscriptionResponse, CreateProjectDto, CreateBondDto, OrderQueryParams, ListBondDto, BuyBondDto,
@@ -87,8 +88,9 @@ export class ApiService {
   private readonly http = inject(HttpClient);
   private readonly authService = inject(AuthService);
   private readonly walletService = inject(WalletService);
+  private readonly adminIntent = inject(AdminIntentService);
 
-  private headers(): HttpHeaders {
+  private headers(extra?: Record<string, string>): HttpHeaders {
     const token = this.authService.token();
     const walletAddress = this.walletService.address();
     let headers = new HttpHeaders(
@@ -97,7 +99,28 @@ export class ApiService {
     if (walletAddress) {
       headers = headers.set('x-wallet-address', walletAddress);
     }
+    if (extra) {
+      for (const [k, v] of Object.entries(extra)) {
+        headers = headers.set(k, v);
+      }
+    }
     return headers;
+  }
+
+  /** Produce an `x-admin-intent` header for a high-risk admin action (#115). */
+  private adminIntentHeader(action: string, target: string): Record<string, string> | undefined {
+    if (!this.adminIntent.hasSecret) return undefined;
+    try {
+      const intent: SignedAdminIntent = this.adminIntent.create(action, target);
+      return { 'x-admin-intent': JSON.stringify(intent) };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Generate a stable idempotency key for a user action (#114). */
+  generateIdempotencyKey(prefix: string): string {
+    return `${prefix}-${crypto.randomUUID()}`;
   }
 
   private withProblemDetails<T>(source: Observable<T>): Observable<T> {
@@ -130,33 +153,37 @@ export class ApiService {
   }
 
   issueBond(data: CreateBondDto): Observable<Bond> {
-    return this.withProblemDetails(this.http.post<Bond>('/api/bonds', data, { headers: this.headers() }));
+    const headers = this.headers(this.adminIntentHeader('issue_bond', 'global'));
+    return this.withProblemDetails(this.http.post<Bond>('/api/bonds', data, { headers }));
   }
 
-  subscribeToBond(id: number, amount: number): Observable<SubscriptionResponse> {
+  subscribeToBond(id: number, amount: number, idempotencyKey?: string): Observable<SubscriptionResponse> {
     const investorAddress = this.walletService.address();
+    const headers = this.headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined);
     return this.withProblemDetails(this.http.post<SubscriptionResponse>(
       `/api/bonds/${id}/subscribe`,
       { amount, investorAddress },
-      { headers: this.headers() },
+      { headers },
     ));
   }
 
-  claimCredits(id: number): Observable<ClaimCreditsResponse> {
+  claimCredits(id: number, idempotencyKey?: string): Observable<ClaimCreditsResponse> {
     const investorAddress = this.walletService.address();
+    const headers = this.headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined);
     return this.withProblemDetails(this.http.post<ClaimCreditsResponse>(
       `/api/bonds/${id}/claim`,
       { investorAddress },
-      { headers: this.headers() },
+      { headers },
     ));
   }
 
-  transferBond(id: number, toAddress: string, amount: number): Observable<TransferResponse> {
+  transferBond(id: number, toAddress: string, amount: number, idempotencyKey?: string): Observable<TransferResponse> {
     const fromAddress = this.walletService.address();
+    const headers = this.headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined);
     return this.withProblemDetails(this.http.post<TransferResponse>(
       `/api/bonds/${id}/transfer`,
       { fromAddress, toAddress, amount },
-      { headers: this.headers() },
+      { headers },
     ));
   }
 
@@ -168,10 +195,11 @@ export class ApiService {
   }
 
   sweepUndistributed(id: number): Observable<SweepUndistributedResponse> {
+    const headers = this.headers(this.adminIntentHeader('sweep_undistributed', String(id)));
     return this.withProblemDetails(this.http.post<SweepUndistributedResponse>(
       `/api/bonds/${id}/sweep-undistributed`,
       {},
-      { headers: this.headers() },
+      { headers },
     ));
   }
 
@@ -202,12 +230,14 @@ export class ApiService {
     }));
   }
 
-  listBondTokens(data: ListBondDto): Observable<Order> {
-    return this.withProblemDetails(this.http.post<Order>('/api/marketplace/list', data, { headers: this.headers() }));
+  listBondTokens(data: ListBondDto, idempotencyKey?: string): Observable<Order> {
+    const headers = this.headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined);
+    return this.withProblemDetails(this.http.post<Order>('/api/marketplace/list', data, { headers }));
   }
 
-  buyBondTokens(data: BuyBondDto): Observable<void> {
-    return this.withProblemDetails(this.http.post<void>('/api/marketplace/buy', data, { headers: this.headers() }));
+  buyBondTokens(data: BuyBondDto, idempotencyKey?: string): Observable<void> {
+    const headers = this.headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined);
+    return this.withProblemDetails(this.http.post<void>('/api/marketplace/buy', data, { headers }));
   }
 
   cancelOrder(orderId: number): Observable<void> {
@@ -228,12 +258,24 @@ export class ApiService {
     }));
   }
 
-  depositQuote(data: DepositQuoteDto): Observable<QuoteTransactionResponse> {
-    return this.withProblemDetails(this.http.post<QuoteTransactionResponse>('/api/marketplace/deposit', data, { headers: this.headers() }));
+  depositQuote(data: DepositQuoteDto, idempotencyKey?: string): Observable<QuoteTransactionResponse> {
+    const headers = this.headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined);
+    return this.withProblemDetails(this.http.post<QuoteTransactionResponse>('/api/marketplace/deposit', data, { headers }));
   }
 
-  withdrawQuote(data: WithdrawQuoteDto): Observable<QuoteTransactionResponse> {
-    return this.withProblemDetails(this.http.post<QuoteTransactionResponse>('/api/marketplace/withdraw', data, { headers: this.headers() }));
+  withdrawQuote(data: WithdrawQuoteDto, idempotencyKey?: string): Observable<QuoteTransactionResponse> {
+    const headers = this.headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined);
+    return this.withProblemDetails(this.http.post<QuoteTransactionResponse>('/api/marketplace/withdraw', data, { headers }));
+  }
+
+  getPortfolio(address?: string, force = false): Observable<any> {
+    let params = new HttpParams();
+    if (address) params = params.set('address', address);
+    if (force) params = params.set('force', 'true');
+    return this.withProblemDetails(this.http.get<any>('/api/portfolio', {
+      params,
+      headers: this.headers(),
+    }));
   }
 
   /** Challenge review (#oracle-challenge): challenged reports for a project. */

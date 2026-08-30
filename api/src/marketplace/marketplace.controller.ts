@@ -25,6 +25,7 @@ import {
 import { PaginatedResponse, PaginationDto } from '../common/dto/pagination.dto';
 import { toBigIntString } from '../common/utils';
 import { listSupportedQuoteAssets, QuoteAssetConfig } from './quote-assets';
+import { Idempotent } from '../common/decorators/idempotent.decorator';
 
 @Controller('marketplace')
 export class MarketplaceController {
@@ -60,6 +61,7 @@ export class MarketplaceController {
 
   @Post('list')
   @UseGuards(JwtAuthGuard)
+  @Idempotent()
   @HttpCode(HttpStatus.CREATED)
   async listBondTokens(
     @Body() dto: ListBondDto,
@@ -71,6 +73,7 @@ export class MarketplaceController {
 
   @Post('buy')
   @UseGuards(JwtAuthGuard)
+  @Idempotent()
   @HttpCode(HttpStatus.OK)
   async buyBondTokens(
     @Body() dto: BuyBondDto,
@@ -104,6 +107,7 @@ export class MarketplaceController {
 
   @Post('deposit')
   @UseGuards(JwtAuthGuard)
+  @Idempotent()
   @HttpCode(HttpStatus.OK)
   async depositQuote(
     @Body() dto: DepositQuoteDto,
@@ -115,6 +119,7 @@ export class MarketplaceController {
 
   @Post('withdraw')
   @UseGuards(JwtAuthGuard)
+  @Idempotent()
   @HttpCode(HttpStatus.OK)
   async withdrawQuote(
     @Body() dto: WithdrawQuoteDto,

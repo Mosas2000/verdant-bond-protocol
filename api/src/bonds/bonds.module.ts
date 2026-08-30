@@ -7,5 +7,6 @@ import { OracleModule } from '../oracle/oracle.module';
   imports: [OracleModule],
   controllers: [BondsController],
   providers: [BondsService],
+  exports: [BondsService],
 })
 export class BondsModule {}
