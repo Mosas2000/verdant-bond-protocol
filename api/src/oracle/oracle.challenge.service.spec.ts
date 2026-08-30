@@ -160,5 +160,28 @@ describe('OracleService challenge review (#oracle-challenge)', () => {
       expect(eligibility.eligible).toBe(false);
       expect(eligibility.reasons.join(' ')).toMatch(/no verified/i);
     });
+
+    it('blocks overlapping verified periods but allows adjacent periods', async () => {
+      projectWith([1, 1]);
+      const overlapping = await service.getCouponEligibility(PROJECT);
+      expect(overlapping.eligible).toBe(false);
+      expect(overlapping.blockedByReportIds).toEqual(expect.arrayContaining([1, 2]));
+
+      simulateCall.mockImplementation((opts: any) => {
+        if (opts.method === 'get_project_reports') return [1n, 2n];
+        if (opts.method === 'get_report') {
+          const id = Number(opts.args[0].value());
+          const report = reportScVal(id, 'G_PROV', 1);
+          if (id === 2) {
+            report[3] = BigInt(1700086400);
+            report[4] = BigInt(1700172800);
+          }
+          return report;
+        }
+        return [];
+      });
+      const adjacent = await service.getCouponEligibility(PROJECT);
+      expect(adjacent.eligible).toBe(true);
+    });
   });
 });

@@ -1,6 +1,5 @@
 import {
   Controller, Get, Post, Delete, Body, Param, Query, Req,
-  HttpCode, HttpStatus, ParseIntPipe, NotFoundException,
   HttpCode, HttpStatus, ParseIntPipe, UseGuards,
 } from '@nestjs/common';
 import { DexService } from './dex.service';

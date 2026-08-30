@@ -30,6 +30,7 @@ describe('MarketplaceListComponent', () => {
   let apiService: {
     getBonds: jasmine.Spy;
     getOrders: jasmine.Spy;
+    getOrder: jasmine.Spy;
     buyBondTokens: jasmine.Spy;
     cancelOrder: jasmine.Spy;
     getQuoteBalance: jasmine.Spy;
@@ -44,6 +45,7 @@ describe('MarketplaceListComponent', () => {
     apiService = {
       getBonds: jasmine.createSpy('getBonds').and.returnValue(of({ data: [], meta: { page: 1, limit: 100, total: 0, totalPages: 1 } })),
       getOrders: jasmine.createSpy('getOrders').and.returnValue(of({ data: [ORDER], meta: { page: 1, limit: 20, total: 1, totalPages: 1 } })),
+      getOrder: jasmine.createSpy('getOrder').and.returnValue(of(ORDER)),
       buyBondTokens: jasmine.createSpy('buyBondTokens').and.returnValue(of(undefined)),
       cancelOrder: jasmine.createSpy('cancelOrder').and.returnValue(of(undefined)),
       getQuoteBalance: jasmine
@@ -139,6 +141,29 @@ describe('MarketplaceListComponent', () => {
       amount: 5,
       maxPrice: 10,
     });
+  });
+
+  it('revalidates price immediately before submission', () => {
+    apiService.getOrder.and.returnValue(of({ ...ORDER, pricePerToken: '11' }));
+    component.openBuy(ORDER);
+    component.buyAmount = 5;
+    component.buyMaxPrice = 10;
+    component.onBuy(ORDER);
+
+    expect(apiService.getOrder).toHaveBeenCalledWith(1);
+    expect(apiService.buyBondTokens).not.toHaveBeenCalled();
+    expect(component.buyError()).toContain('Stale price');
+  });
+
+  it('revalidates remaining depth immediately before submission', () => {
+    apiService.getOrder.and.returnValue(of({ ...ORDER, amount: '4', status: 'PartiallyFilled' }));
+    component.openBuy(ORDER);
+    component.buyAmount = 5;
+    component.buyMaxPrice = 10;
+    component.onBuy(ORDER);
+
+    expect(apiService.buyBondTokens).not.toHaveBeenCalled();
+    expect(component.buyError()).toContain('only 4 tokens remain');
   });
 
   describe('order refresh', () => {

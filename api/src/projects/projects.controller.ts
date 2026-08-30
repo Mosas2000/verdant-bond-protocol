@@ -5,7 +5,7 @@ import {
 import { ProjectsService } from './projects.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
-import { ProjectResponse } from './interfaces/project.interface';
+import { ProjectResponse, ProjectProvenanceResponse } from './interfaces/project.interface';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { AdminGuard } from '../common/guards/admin.guard';
 import { IntentGuard } from '../common/guards/intent.guard';
@@ -31,6 +31,13 @@ export class ProjectsController {
     @Param('id', ParseIntPipe) id: number,
   ): Promise<ProjectResponse> {
     return this.projectsService.findOne(id);
+  }
+
+  @Get(':id/provenance')
+  async provenance(
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<ProjectProvenanceResponse> {
+    return this.projectsService.getProvenance(id);
   }
 
   @Post(':id/approve')

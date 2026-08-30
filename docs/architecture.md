@@ -380,3 +380,9 @@ AppComponent
 /marketplace/sell → MarketplaceSellComponent
 /auth → AuthComponent
 ```
+# Project provenance
+
+`GET /projects/:id/provenance` assembles registration, review, oracle report,
+bond issuance, and document evidence into one chronological response. Entries
+without a ledger timestamp are retained with a null timestamp and explicit
+pending/complete state instead of inventing ordering data.

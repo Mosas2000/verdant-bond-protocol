@@ -27,6 +27,7 @@ export enum StableErrorCode {
   ORACLE_INSUFFICIENT_STAKE = 'ORACLE_INSUFFICIENT_STAKE',
   ORACLE_INVALID_SIGNATURE = 'ORACLE_INVALID_SIGNATURE',
   ORACLE_INVALID_RESOLUTION = 'ORACLE_INVALID_RESOLUTION',
+  ORACLE_OVERLAPPING_REPORT_PERIOD = 'ORACLE_OVERLAPPING_REPORT_PERIOD',
 
   // DEX Errors
   DEX_NOT_INITIALIZED = 'DEX_NOT_INITIALIZED',
@@ -119,6 +120,7 @@ export const ERROR_MAPPINGS: Record<string, Record<number, { code: StableErrorCo
     9: { code: StableErrorCode.ORACLE_INSUFFICIENT_STAKE, message: 'Oracle provider stake is insufficient' },
     10: { code: StableErrorCode.ORACLE_INVALID_SIGNATURE, message: 'Invalid signature for oracle verification' },
     11: { code: StableErrorCode.ORACLE_INVALID_RESOLUTION, message: 'Invalid resolution state for challenge' },
+    12: { code: StableErrorCode.ORACLE_OVERLAPPING_REPORT_PERIOD, message: 'Oracle report period overlaps an existing report' },
   },
   DEX: {
     1: { code: StableErrorCode.DEX_NOT_INITIALIZED, message: 'DEX contract is not initialized' },

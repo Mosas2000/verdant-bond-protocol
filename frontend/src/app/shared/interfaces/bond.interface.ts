@@ -44,6 +44,20 @@ export interface Project {
   createdAt: string;
 }
 
+export interface ProjectProvenanceEvent {
+  type: 'registration' | 'review' | 'report' | 'bond' | 'document';
+  occurredAt: string | null;
+  title: string;
+  status: 'complete' | 'pending' | 'stale';
+  reference?: string;
+  evidenceUrl?: string;
+}
+
+export interface ProjectProvenance {
+  projectId: number;
+  events: ProjectProvenanceEvent[];
+}
+
 export type QuoteAsset = 'USDC' | 'XLM';
 
 export interface Order {
