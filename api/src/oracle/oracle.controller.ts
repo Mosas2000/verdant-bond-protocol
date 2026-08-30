@@ -22,6 +22,9 @@ import {
   ProviderResponse,
   ProviderStatsWithHistory,
   OracleStalenessReport,
+  ChallengeStateResponse,
+  ChallengedReportSummary,
+  CouponEligibility,
 } from './interfaces/oracle.interface';
 import { OracleIncident } from './interfaces/oracle-incident.interface';
 import { PaginatedResponse } from '../common/dto/pagination.dto';
@@ -50,6 +53,41 @@ export class OracleController {
     @Param('projectId') projectId: string,
   ): Promise<ReportResponse[]> {
     return this.oracleService.getProjectReports(projectId);
+  }
+
+  /**
+   * Challenge review surface (#oracle-challenge): list every challenged report
+   * for a project, each with its latest challenge record (counter-evidence hash,
+   * challenger, submitted time, resolution).
+   */
+  @Get('reports/:projectId/challenges')
+  async getProjectChallengedReports(
+    @Param('projectId') projectId: string,
+  ): Promise<ChallengedReportSummary[]> {
+    return this.oracleService.getProjectChallengedReports(projectId);
+  }
+
+  /**
+   * Full challenge detail for a single report: current status plus all on-chain
+   * challenge records (counter-evidence hash, challenger, submitted time,
+   * resolution). Resolution history links to coupon-distribution eligibility.
+   */
+  @Get('challenges/:reportId')
+  async getReportChallengeState(
+    @Param('reportId', ParseIntPipe) reportId: number,
+  ): Promise<ChallengeStateResponse> {
+    return this.oracleService.getReportChallengeState(reportId);
+  }
+
+  /**
+   * Coupon-distribution eligibility for a project (#oracle-challenge). Used by
+   * the bond coupon flow to block/warn distribution when a report is challenged.
+   */
+  @Get('projects/:projectId/coupon-eligibility')
+  async getCouponEligibility(
+    @Param('projectId') projectId: string,
+  ): Promise<CouponEligibility> {
+    return this.oracleService.getCouponEligibility(projectId);
   }
 
   @Post('challenge/:reportId')

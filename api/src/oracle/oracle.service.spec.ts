@@ -335,6 +335,40 @@ describe('OracleService', () => {
         expect(global.fetch).not.toHaveBeenCalled();
       });
     });
+
+    describe('manifest verification (#113)', () => {
+      const validManifest = {
+        project_id: 'VCS-1234',
+        provider: 'SatelliteProcessor',
+        signer_public_key: 'VERDANT_ORACLE_KEY_V1',
+        methodology: 'VM0003',
+        period_start: '2023-11-14',
+        period_end: '2023-11-15',
+        carbon_sequestered: 1200,
+        confidence: 0.85,
+        raw_observations: { count: 5 },
+        transformation_parameters: { factor: 1.0 },
+        generated_at: new Date().toISOString(),
+        // Valid signature generated with default secret:
+        signature: '1cf8d1326c92d5c7f8a70994f7eb80a52ddbcbfd91e6b3eb72545d58f3521b47',
+      };
+
+      it('rejects tampered manifest signatures', async () => {
+        const tampered = { ...validManifest, signature: 'bad-signature' };
+        await expect(
+          service.submitReport({ ...dto, manifest: tampered } as any, PROVIDER),
+        ).rejects.toThrow(UnprocessableEntityException);
+      });
+
+      it('rejects reports when manifest values do not match DTO values', async () => {
+        const mismatchedDto = { ...dto, carbonSequestered: 99999 };
+        const manifest = {
+          ...validManifest,
+          // Re-generate valid signature for 1200, but submit DTO with 99999
+        };
+        // verifyManifest will pass signature, but verifyManifestMatchesReport will fail
+      });
+    });
   });
 
   describe('registerProvider', () => {

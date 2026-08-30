@@ -203,7 +203,7 @@ export class DexService {
   }
 
   /** Reads the order directly from the ledger, bypassing the Redis cache entirely. */
-  private async fetchOrderFromLedger(orderId: number): Promise<OrderResponse> {
+  async fetchOrderFromLedger(orderId: number): Promise<OrderResponse> {
     const orderScVal = await this.contractService.simulateCall({
       contractAddress: this.configService.getDexRouterAddress(),
       method: 'get_order',
@@ -263,6 +263,8 @@ export class DexService {
     );
 
     await this.redis.del(`portfolio:${callerAddress}`).catch(() => undefined);
+    await this.invalidateQuoteBalanceIndex(callerAddress, dto.asset);
+
     return { address: callerAddress, asset: dto.asset, amount: dto.amount, transactionHash };
   }
 
@@ -284,7 +286,33 @@ export class DexService {
     );
 
     await this.redis.del(`portfolio:${callerAddress}`).catch(() => undefined);
+    await this.invalidateQuoteBalanceIndex(callerAddress, dto.asset);
+
     return { address: callerAddress, asset: dto.asset, amount: dto.amount, transactionHash };
+  }
+
+  private quoteBalanceIndexKey(address: string, asset: QuoteAsset): string {
+    return `quote:balance:${address}:${asset}`;
+  }
+
+  /**
+   * Reconciliation (#recon): the API/indexed view of a wallet's escrowed quote
+   * balance. The reconciliation job compares this against the on-chain
+   * `get_quote_balance` value. Deposit/withdraw keep it fresh by evicting it;
+   * a missed eviction is exactly what reconciliation surfaces as a balance
+   * mismatch (a "stale cache" divergence).
+   */
+  async getIndexedQuoteBalance(address: string, asset: QuoteAsset): Promise<string | null> {
+    return this.redis.get(this.quoteBalanceIndexKey(address, asset));
+  }
+
+  async setIndexedQuoteBalance(address: string, asset: QuoteAsset, balance: string): Promise<void> {
+    await this.redis.setEx(this.quoteBalanceIndexKey(address, asset), 86_400, balance);
+  }
+
+  private async invalidateQuoteBalanceIndex(address: string, assetSymbol: string): Promise<void> {
+    const asset = normalizeQuoteAssetSymbol(assetSymbol);
+    await this.redis.del(this.quoteBalanceIndexKey(address, asset));
   }
 
   private decodeOrder(data: any[]): OrderResponse {
@@ -376,7 +404,7 @@ export class DexService {
     };
   }
 
-  private async getOrderCount(): Promise<number> {
+  async getOrderCount(): Promise<number> {
     const countScVal = await this.contractService.simulateCall({
       contractAddress: this.configService.getDexRouterAddress(),
       method: 'order_count',

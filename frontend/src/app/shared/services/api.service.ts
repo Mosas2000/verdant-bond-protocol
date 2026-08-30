@@ -10,7 +10,7 @@ import {
   ClaimCreditsResponse, TransferResponse,
   UndistributedTotalResponse, SweepUndistributedResponse,
   QuoteBalanceResponse, QuoteTransactionResponse,
-  QuoteAsset, DepositQuoteDto, WithdrawQuoteDto,
+  QuoteAsset, DepositQuoteDto, WithdrawQuoteDto, HolderResponse,
 } from '../interfaces/bond.interface';
 
 export interface ProblemDetails {
@@ -29,6 +29,58 @@ export class ApiProblemError extends Error {
   constructor(readonly problem: ProblemDetails) {
     super(problem.detail || problem.title);
   }
+}
+
+/** Lifecycle status of an oracle report (see docs/oracle-challenge-lifecycle.md). */
+export type OracleReportStatus = 'Pending' | 'Verified' | 'Challenged' | 'Rejected';
+
+export interface ChallengeRecord {
+  reportId: number;
+  challengerAddress: string;
+  counterEvidenceHash: string;
+  submittedAt: string;
+  resolved: boolean;
+  resolution: OracleReportStatus | null;
+}
+
+export interface ChallengeStateResponse {
+  reportId: number;
+  status: OracleReportStatus;
+  challenged: boolean;
+  challenges: ChallengeRecord[];
+}
+
+export interface ChallengedReportSummary {
+  report: {
+    id: number;
+    projectId: string;
+    status: OracleReportStatus;
+    providerAddress: string;
+    createdAt: string;
+  };
+  challenge: ChallengeRecord | null;
+}
+
+export interface CouponEligibility {
+  projectId: string;
+  eligible: boolean;
+  reasons: string[];
+  blockedByReportIds: number[];
+}
+
+/**
+ * Consolidated, atomically-fetched bond detail (issue #4). A single call returns
+ * the bond summary, holders, coupon undistributed total, and maturity status so
+ * the frontend can refresh every panel together and never render a mix of
+ * pre- and post-mutation data. `loadedAt` is the server timestamp used by the
+ * client refresh model to detect staleness.
+ */
+export interface BondDetailResponse {
+  bond: Bond;
+  holders: HolderResponse[];
+  coupon: { undistributedTotal: string };
+  maturity: { reached: boolean; date: number; secondsUntil: number };
+  loadedAt: string;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -224,5 +276,38 @@ export class ApiService {
       params,
       headers: this.headers(),
     }));
+  }
+
+  /** Challenge review (#oracle-challenge): challenged reports for a project. */
+  getProjectChallengedReports(projectId: string): Observable<ChallengedReportSummary[]> {
+    return this.withProblemDetails(
+      this.http.get<ChallengedReportSummary[]>(`/api/oracle/reports/${projectId}/challenges`),
+    );
+  }
+
+  /** Challenge review (#oracle-challenge): full challenge state + history for a report. */
+  getReportChallengeState(reportId: number): Observable<ChallengeStateResponse> {
+    return this.withProblemDetails(
+      this.http.get<ChallengeStateResponse>(`/api/oracle/challenges/${reportId}`),
+    );
+  }
+
+  /** Coupon-distribution eligibility for a project, gated by challenge state. */
+  getCouponEligibility(projectId: string): Observable<CouponEligibility> {
+    return this.withProblemDetails(
+      this.http.get<CouponEligibility>(`/api/oracle/projects/${projectId}/coupon-eligibility`),
+    );
+  }
+
+  /**
+   * Atomically refresh every panel of a bond's detail (issue #4). `_t` busts any
+   * HTTP cache so the client sees fresh post-mutation data; the response carries
+   * a server `loadedAt` timestamp the client uses for staleness detection.
+   */
+  getBondDetail(id: number, opts?: { bustCache?: boolean }): Observable<BondDetailResponse> {
+    const params = opts?.bustCache === false ? undefined : new HttpParams().set('_t', Date.now().toString());
+    return this.withProblemDetails(
+      this.http.get<BondDetailResponse>(`/api/bonds/${id}/detail`, { params }),
+    );
   }
 }

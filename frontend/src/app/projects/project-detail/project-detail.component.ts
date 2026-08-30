@@ -4,12 +4,13 @@ import { RouterModule, ActivatedRoute } from '@angular/router';
 import { ApiService } from '../../shared/services/api.service';
 import { StatusBadgeComponent } from '../../shared/components/status-badge/status-badge.component';
 import { LoadingSpinnerComponent } from '../../shared/components/loading-spinner/loading-spinner.component';
+import { ChallengedReportsComponent } from '../challenged-reports/challenged-reports.component';
 import { Project } from '../../shared/interfaces/bond.interface';
 
 @Component({
   selector: 'app-project-detail',
   standalone: true,
-  imports: [CommonModule, RouterModule, StatusBadgeComponent, LoadingSpinnerComponent],
+  imports: [CommonModule, RouterModule, StatusBadgeComponent, LoadingSpinnerComponent, ChallengedReportsComponent],
   template: `
     <div class="detail-page">
       <a class="back-link" routerLink="/projects">← Back to Projects</a>
@@ -56,6 +57,8 @@ import { Project } from '../../shared/interfaces/bond.interface';
             </div>
           </div>
         </div>
+
+        <app-challenged-reports [projectId]="p.id" />
       } @else if (loading()) {
         <div class="loading-section"><app-loading-spinner size="lg" /></div>
       } @else if (error()) {

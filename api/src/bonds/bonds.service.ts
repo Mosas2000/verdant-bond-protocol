@@ -29,6 +29,9 @@ import {
 } from './interfaces/bond.interface';
 import { toBigIntString } from '../common/utils';
 import { ConfigService } from '../config/config.service';
+import { OracleService } from '../oracle/oracle.service';
+import { ReportStatus } from '../oracle/interfaces/oracle.interface';
+import { Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 
 const BOND_ERROR_CODE = {
   NotInitialized: 1,
@@ -53,6 +56,7 @@ export class BondsService {
     private readonly signingKeys: SigningKeyProvider,
     private readonly configService: ConfigService,
     private readonly holderIndex: HolderIndexService,
+    @Optional() private readonly oracleService?: OracleService,
   ) {}
 
   async create(dto: CreateBondDto): Promise<BondResponse> {
@@ -177,12 +181,58 @@ export class BondsService {
     return { bondId: id, holders, total: holders.length };
   }
 
+  /**
+   * Atomically refresh every panel of a bond's detail (issue #4). Fetches the
+   * bond summary, holders, and coupon undistributed total together and derives
+   * a single maturity status, so callers never commit a mix of pre- and
+   * post-mutation values. `loadedAt` lets the client refresh model detect
+   * staleness against its own `lastLoadedAt`.
+   */
+  async getBondDetail(id: number): Promise<BondDetailResponse> {
+    const bond = await this.buildBondResponse(id);
+    const [holdersResponse, couponResponse] = await Promise.all([
+      this.getHolders(id),
+      this.getUndistributedTotal(id),
+    ]);
+
+    const now = Math.floor(Date.now() / 1000);
+    const reached = bond.status === 1 || now >= bond.maturityDate;
+    const secondsUntil = reached ? 0 : bond.maturityDate - now;
+
+    return {
+      bond,
+      holders: holdersResponse.holders,
+      coupon: { undistributedTotal: couponResponse.undistributedTotal },
+      maturity: { reached, date: bond.maturityDate, secondsUntil },
+      loadedAt: new Date().toISOString(),
+    };
+  }
+
   async distributeCoupon(id: number, dto: DistributeCouponDto): Promise<CouponDistributionResponse> {
     const adminSecret = this.getAdminSecret();
     const adminAddress = this.stellarService.getKeypairFromSecret(adminSecret).publicKey();
     const nonce = await this.nonceService.next(this.configService.getCouponEngineAddress(), adminAddress);
 
     const holderAddresses = await this.holderIndex.getHoldersForCoupon(id, { requireFresh: true });
+    // Challenge linkage (#oracle-challenge): a coupon pays out on the carbon
+    // data in the referenced oracle report. If that report is Challenged or
+    // Rejected, the data is disputed and must not be paid on, so block before
+    // any contract call is made. The oracle dependency is optional so the bond
+    // module keeps working where the oracle module is not wired in.
+    if (this.oracleService) {
+      const report = await this.oracleService.getReport(dto.reportId);
+      if (report.status === ReportStatus.Challenged) {
+        throw new BadRequestException(
+          `Cannot distribute coupon: report ${report.id} is currently Challenged. ` +
+            'Resolve the challenge before distributing.',
+        );
+      }
+      if (report.status === ReportStatus.Rejected) {
+        throw new BadRequestException(`Cannot distribute coupon: report ${report.id} was Rejected.`);
+      }
+    }
+
+    const holderAddresses = await this.redis.sMembers(`bond:${id}:holders`);
 
     const { result } = await this.contractService.invokeContractMethod(
       this.configService.getCouponEngineAddress(), 'distribute_coupon', adminSecret,

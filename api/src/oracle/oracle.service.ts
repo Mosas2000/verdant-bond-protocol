@@ -21,6 +21,7 @@ import { nativeToScVal, scValToNative, Address, xdr } from '@stellar/stellar-sdk
 import { StellarService } from '../stellar/stellar.service';
 import { toBigIntString, encodeCid } from '../common/utils';
 import { ConfigService } from '../config/config.service';
+import { verifyManifest, verifyManifestMatchesReport } from '../../../oracle/manifest';
 
 
 
@@ -48,6 +49,27 @@ export class OracleService {
   ) {}
 
 async submitReport(dto: SubmitReportDto, providerAddress: string): Promise<ReportResponse> {
+    if (dto.manifest) {
+      const verification = verifyManifest(dto.manifest);
+      if (!verification.valid) {
+        throw new UnprocessableEntityException(
+          `Manifest verification failed: ${verification.error}`,
+        );
+      }
+      const matchVerification = verifyManifestMatchesReport(dto.manifest as any, {
+        project_id: dto.projectId,
+        methodology: dto.methodology,
+        period_start: dto.periodStart,
+        period_end: dto.periodEnd,
+        carbon_sequestered: dto.carbonSequestered,
+      });
+      if (!matchVerification.valid) {
+        throw new BadRequestException(
+          `Manifest values do not match report submission: ${matchVerification.error}`,
+        );
+      }
+    }
+
     const ipfsResult = await this.ipfsService.uploadJson({
       projectId: dto.projectId,
       periodStart: dto.periodStart,
@@ -132,6 +154,83 @@ async submitReport(dto: SubmitReportDto, providerAddress: string): Promise<Repor
 
     await this.redis.setEx(cacheKey, 60, JSON.stringify(reports));
     return reports;
+  }
+
+  /** Fetches a single report by id directly from the ledger. */
+  async getReport(reportId: number): Promise<ReportResponse> {
+    const reportScVal = await this.contractService.simulateCall({
+      contractAddress: this.configService.getOracleConsumerAddress(),
+      method: 'get_report',
+      args: [nativeToScVal(BigInt(reportId), { type: 'u64' })],
+    });
+    return this.decodeReport(scValToNative(reportScVal) as any[]);
+  }
+
+  /**
+   * Challenge review surface (#oracle-challenge): returns the report's status
+   * plus every on-chain challenge record against it (counter-evidence hash,
+   * challenger, submitted time, resolution). The report's provider address links
+   * the report to its challenge history.
+   */
+  async getReportChallengeState(reportId: number): Promise<ChallengeStateResponse> {
+    const report = await this.getReport(reportId);
+    const challenges = (await this.getChallengeHistory(report.providerAddress)).filter(
+      (c) => c.reportId === reportId,
+    );
+    return {
+      reportId,
+      status: report.status,
+      challenged: report.status === ReportStatus.Challenged,
+      challenges,
+    };
+  }
+
+  /** Lists every challenged report for a project, each with its latest challenge record. */
+  async getProjectChallengedReports(projectId: string): Promise<ChallengedReportSummary[]> {
+    const reports = await this.getProjectReports(projectId);
+    const challenged = reports.filter((r) => r.status === ReportStatus.Challenged);
+    return Promise.all(
+      challenged.map(async (report) => {
+        const challenges = (await this.getChallengeHistory(report.providerAddress)).filter(
+          (c) => c.reportId === report.id,
+        );
+        return { report, challenge: challenges[0] ?? null };
+      }),
+    );
+  }
+
+  /**
+   * Coupon-distribution eligibility for a project (#oracle-challenge). A project
+   * is eligible only when it has at least one Verified report and no report is
+   * currently Challenged or Rejected. Distributing a coupon on disputed/rejected
+   * data must be blocked.
+   */
+  async getCouponEligibility(projectId: string): Promise<CouponEligibility> {
+    const reports = await this.getProjectReports(projectId);
+    const reasons: string[] = [];
+    const blockedByReportIds: number[] = [];
+
+    const hasVerified = reports.some((r) => r.status === ReportStatus.Verified);
+    const blocking = reports.filter(
+      (r) => r.status === ReportStatus.Challenged || r.status === ReportStatus.Rejected,
+    );
+
+    if (!hasVerified) {
+      reasons.push('No verified oracle report exists for this project');
+    }
+    if (blocking.length > 0) {
+      reasons.push(
+        `${blocking.length} report(s) are challenged or rejected and must be resolved first`,
+      );
+      blockedByReportIds.push(...blocking.map((r) => r.id));
+    }
+
+    const eligible = hasVerified && blocking.length === 0;
+    if (!eligible && reasons.length === 0) {
+      reasons.push('Coupon distribution is not eligible for this project');
+    }
+
+    return { projectId, eligible, reasons, blockedByReportIds };
   }
 
 async challengeReport(reportId: number, dto: ChallengeDto, challengerAddress: string): Promise<ChallengeResponse> {
