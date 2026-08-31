@@ -2,7 +2,7 @@ import { Injectable, ConflictException, Logger } from '@nestjs/common';
 import { ContractService } from '../stellar/contract.service';
 import { RedisService } from '../common/services/redis.service';
 import { ConfigService } from '../config/config.service';
-import { Address, nativeToScVal } from '@stellar/stellar-sdk';
+import { Address, nativeToScVal, scValToNative } from '@stellar/stellar-sdk';
 import { toBigIntString } from '../common/utils';
 import { HolderStore, createHolderStore } from './holder-store';
 
@@ -56,7 +56,7 @@ export class HolderIndexService {
       method: 'get_holder_balance',
       args: [nativeToScVal(BigInt(bondId), { type: 'u64' }), Address.fromString(address).toScVal()],
     });
-    return BigInt(toBigIntString(balanceScVal));
+    return BigInt(toBigIntString(scValToNative(balanceScVal)));
   }
 
   /** Record a successful API subscribe as an authoritative holder. */

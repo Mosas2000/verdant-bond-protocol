@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Optional } from '@nestjs/common';
 import { ContractService } from '../stellar/contract.service';
 import { ContractException } from '../stellar/contract-errors';
 import { StellarService } from '../stellar/stellar.service';
@@ -23,6 +23,7 @@ import {
   TransferResponse,
   UndistributedTotalResponse,
   SweepUndistributedResponse,
+  BondDetailResponse,
   BondStatusEnum,
   BondMaturityStatusEnum,
   CreditTypeEnum,
@@ -31,7 +32,6 @@ import { toBigIntString } from '../common/utils';
 import { ConfigService } from '../config/config.service';
 import { OracleService } from '../oracle/oracle.service';
 import { ReportStatus } from '../oracle/interfaces/oracle.interface';
-import { Address, nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 
 const BOND_ERROR_CODE = {
   NotInitialized: 1,
@@ -196,7 +196,9 @@ export class BondsService {
     ]);
 
     const now = Math.floor(Date.now() / 1000);
-    const reached = bond.status === 1 || now >= bond.maturityDate;
+    const reached =
+      bond.maturityStatus === BondMaturityStatusEnum.Matured ||
+      now >= bond.maturityDate;
     const secondsUntil = reached ? 0 : bond.maturityDate - now;
 
     return {
@@ -231,8 +233,6 @@ export class BondsService {
         throw new BadRequestException(`Cannot distribute coupon: report ${report.id} was Rejected.`);
       }
     }
-
-    const holderAddresses = await this.redis.sMembers(`bond:${id}:holders`);
 
     const { result } = await this.contractService.invokeContractMethod(
       this.configService.getCouponEngineAddress(), 'distribute_coupon', adminSecret,

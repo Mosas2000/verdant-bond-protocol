@@ -1,7 +1,7 @@
 import { IdempotencyInterceptor } from './idempotency.interceptor';
-import { IdempotencyService, IdempotencyRecord } from '../services/idempotency.service';
+import { IdempotencyService } from '../services/idempotency.service';
 import { ExecutionContext, ConflictException } from '@nestjs/common';
-import { of, throwError } from 'rxjs';
+import { of, throwError, lastValueFrom } from 'rxjs';
 
 function makeContext(method: string, url: string, body: unknown, key?: string): ExecutionContext {
   const request: any = { method, url, originalUrl: url, body, headers: {} as Record<string, string> };
@@ -17,96 +17,68 @@ function makeContext(method: string, url: string, body: unknown, key?: string): 
 const reflector = { getAllAndOverride: jest.fn().mockReturnValue(true) };
 
 describe('IdempotencyInterceptor', () => {
-  let service: IdempotencyService;
-  let redis: any;
+  let idempotency: {
+    get: jest.Mock;
+    markPending: jest.Mock;
+    complete: jest.Mock;
+  };
 
   beforeEach(() => {
-    redis = {
+    idempotency = {
       get: jest.fn().mockResolvedValue(null),
-      setNxValue: jest.fn().mockResolvedValue(true),
-      setEx: jest.fn().mockResolvedValue(undefined),
+      markPending: jest.fn().mockResolvedValue(true),
+      complete: jest.fn().mockResolvedValue(undefined),
     };
-    service = new IdempotencyService(redis as any);
   });
 
-  function build(record?: IdempotencyRecord | null) {
-    if (record) redis.get.mockResolvedValue(JSON.stringify(record));
-    else redis.get.mockResolvedValue(null);
-    return new IdempotencyInterceptor(reflector as any, service);
+  function build(): IdempotencyInterceptor {
+    return new IdempotencyInterceptor(reflector as any, idempotency as any);
   }
 
-  it('passes through when no idempotency key is supplied', (done) => {
-    const interceptor = build();
+  const fingerprint = (body: unknown) =>
+    IdempotencyService.fingerprintOf('POST', '/x', body);
+
+  it('passes through when no idempotency key is supplied', async () => {
     const handler = { handle: () => of({ ok: true }) };
-    const obs = interceptor.intercept(makeContext('POST', '/x', { a: 1 }), handler as any);
-    obs.subscribe((res) => {
-      expect(res).toEqual({ ok: true });
-      done();
-    });
+    const obs = await build().intercept(makeContext('POST', '/x', { a: 1 }), handler as any);
+    expect(await lastValueFrom(obs)).toEqual({ ok: true });
   });
 
-  it('returns the stored result on a duplicate retry (same fingerprint)', (done) => {
-    const interceptor = build({ status: 'success', fingerprint: 'f', result: { dup: true }, createdAt: 1 });
+  it('returns the stored result on a duplicate retry (same fingerprint)', async () => {
+    const fp = fingerprint({ a: 1 });
+    idempotency.get.mockResolvedValue({ status: 'success', fingerprint: fp, result: { dup: true } });
     const handler = { handle: jest.fn().mockReturnValue(of({ executed: true })) };
-    const obs = interceptor.intercept(makeContext('POST', '/x', { a: 1 }, 'key1'), handler as any);
-    obs.subscribe((res) => {
-      expect(res).toEqual({ dup: true });
-      expect(handler.handle).not.toHaveBeenCalled();
-      done();
-    });
+    const obs = await build().intercept(makeContext('POST', '/x', { a: 1 }, 'key1'), handler as any);
+    expect(await lastValueFrom(obs)).toEqual({ dup: true });
+    expect(handler.handle).not.toHaveBeenCalled();
   });
 
-  it('rejects a conflicting reuse with a different payload', (done) => {
-    const interceptor = build({ status: 'success', fingerprint: 'different', result: {}, createdAt: 1 });
-    const handler = { handle: jest.fn().mockReturnValue(of({ executed: true })) };
-    const obs = interceptor.intercept(makeContext('POST', '/x', { a: 1 }, 'key1'), handler as any);
-    obs.subscribe({
-      next: () => done.fail('expected conflict'),
-      error: (err) => {
-        expect(err).toBeInstanceOf(ConflictException);
-        done();
-      },
-    });
+  it('rejects a conflicting reuse with a different payload', async () => {
+    idempotency.get.mockResolvedValue({ status: 'success', fingerprint: 'different', result: {} });
+    await expect(
+      build().intercept(makeContext('POST', '/x', { a: 1 }, 'key1'), { handle: jest.fn() } as any),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 
-  it('rejects a still-pending key as in-progress', (done) => {
-    const interceptor = build({ status: 'pending', fingerprint: 'f', createdAt: 1 });
-    const handler = { handle: jest.fn().mockReturnValue(of({ executed: true })) };
-    const obs = interceptor.intercept(makeContext('POST', '/x', { a: 1 }, 'key1'), handler as any);
-    obs.subscribe({
-      next: () => done.fail('expected conflict'),
-      error: (err) => {
-        expect(err).toBeInstanceOf(ConflictException);
-        done();
-      },
-    });
+  it('rejects a still-pending key as in-progress', async () => {
+    idempotency.get.mockResolvedValue({ status: 'pending', fingerprint: fingerprint({ a: 1 }) });
+    await expect(
+      build().intercept(makeContext('POST', '/x', { a: 1 }, 'key1'), { handle: jest.fn() } as any),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 
-  it('executes and stores the result for a new key', (done) => {
-    const interceptor = build();
+  it('executes and stores the result for a new key', async () => {
     const handler = { handle: () => of({ transactionHash: '0x1' }) };
-    const obs = interceptor.intercept(makeContext('POST', '/x', { a: 1 }, 'key1'), handler as any);
-    obs.subscribe((res) => {
-      expect(res).toEqual({ transactionHash: '0x1' });
-      // markPending then complete
-      expect(redis.setNxValue).toHaveBeenCalled();
-      expect(redis.setEx).toHaveBeenCalled();
-      done();
-    });
+    const obs = await build().intercept(makeContext('POST', '/x', { a: 1 }, 'key1'), handler as any);
+    expect(await lastValueFrom(obs)).toEqual({ transactionHash: '0x1' });
+    expect(idempotency.markPending).toHaveBeenCalledWith('key1', fingerprint({ a: 1 }));
+    expect(idempotency.complete).toHaveBeenCalledWith('key1', 'success', { transactionHash: '0x1' }, 200);
   });
 
-  it('stores an error record when the handler fails', (done) => {
-    const interceptor = build();
+  it('stores an error record when the handler fails', async () => {
     const handler = { handle: () => throwError(() => new Error('boom')) };
-    const obs = interceptor.intercept(makeContext('POST', '/x', { a: 1 }, 'key1'), handler as any);
-    obs.subscribe({
-      next: () => done.fail('expected error'),
-      error: (err) => {
-        expect(err.message).toBe('boom');
-        const stored = JSON.parse(redis.setEx.mock.calls[0][2]);
-        expect(stored.status).toBe('error');
-        done();
-      },
-    });
+    const obs = await build().intercept(makeContext('POST', '/x', { a: 1 }, 'key1'), handler as any);
+    await expect(lastValueFrom(obs)).rejects.toThrow('boom');
+    expect(idempotency.complete).toHaveBeenCalledWith('key1', 'error', { message: 'boom' }, 200);
   });
 });

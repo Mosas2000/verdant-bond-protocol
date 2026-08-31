@@ -1,7 +1,9 @@
 #![no_std]
 #![allow(deprecated)]
-use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, Env, IntoVal, Symbol, Val, Vec};
 use nbbs_shared::GovernanceError;
+use soroban_sdk::{
+    contract, contractimpl, contracttype, vec, Address, Env, IntoVal, Symbol, Val, Vec,
+};
 
 pub const DEFAULT_TIMELOCK_SECONDS: u64 = 172_800;
 
@@ -80,7 +82,8 @@ fn require_signer(env: &Env, caller: &Address) -> Result<(), GovernanceError> {
     Ok(())
 }
 
-fn get_execution_nonce(env: &Env, target: &Address) -> u64 {    env.storage()
+fn get_execution_nonce(env: &Env, target: &Address) -> u64 {
+    env.storage()
         .instance()
         .get(&DataKey::ExecutionNonce(target.clone()))
         .unwrap_or(0)
@@ -100,9 +103,10 @@ fn is_method_allowed(env: &Env, target: &Address, method: &Symbol) -> bool {
 }
 
 fn set_method_allowed(env: &Env, target: &Address, method: &Symbol, allowed: bool) {
-    env.storage()
-        .instance()
-        .set(&DataKey::AllowList(target.clone(), method.clone()), &allowed);
+    env.storage().instance().set(
+        &DataKey::AllowList(target.clone(), method.clone()),
+        &allowed,
+    );
 }
 
 fn validate_proposal_callable(
@@ -121,7 +125,7 @@ fn validate_proposal_callable(
     //
     // See docs/governance.md for details on the validation strategy.
     // For now, this function is a placeholder for potential future Soroban enhancements.
-    
+
     Ok(())
 }
 
@@ -130,12 +134,7 @@ pub struct Governance;
 
 #[contractimpl]
 impl Governance {
-    pub fn __constructor(
-        env: Env,
-        signers: Vec<Address>,
-        threshold: u32,
-        timelock_seconds: u64,
-    ) {
+    pub fn __constructor(env: Env, signers: Vec<Address>, threshold: u32, timelock_seconds: u64) {
         assert!(!signers.is_empty(), "signers must not be empty");
         assert!(
             threshold > 0 && threshold <= signers.len(),
@@ -150,7 +149,9 @@ impl Governance {
             }
         }
         env.storage().instance().set(&DataKey::Signers, &signers);
-        env.storage().instance().set(&DataKey::Threshold, &threshold);
+        env.storage()
+            .instance()
+            .set(&DataKey::Threshold, &threshold);
         env.storage()
             .instance()
             .set(&DataKey::TimelockSeconds, &timelock_seconds);
@@ -172,10 +173,8 @@ impl Governance {
 
         set_method_allowed(&env, &target, &method, true);
 
-        env.events().publish(
-            (Symbol::new(&env, "method_allowed"),),
-            (target, method),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "method_allowed"),), (target, method));
 
         Ok(())
     }
@@ -193,10 +192,8 @@ impl Governance {
 
         set_method_allowed(&env, &target, &method, false);
 
-        env.events().publish(
-            (Symbol::new(&env, "method_disallowed"),),
-            (target, method),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "method_disallowed"),), (target, method));
 
         Ok(())
     }
@@ -293,7 +290,12 @@ impl Governance {
         }
 
         let vote_key = DataKey::Vote(proposal_id, caller.clone());
-        if env.storage().instance().get::<_, bool>(&vote_key).unwrap_or(false) {
+        if env
+            .storage()
+            .instance()
+            .get::<_, bool>(&vote_key)
+            .unwrap_or(false)
+        {
             return Err(GovernanceError::AlreadyVoted);
         }
         env.storage().instance().set(&vote_key, &true);
@@ -342,7 +344,12 @@ impl Governance {
         }
 
         let vote_key = DataKey::Vote(proposal_id, caller.clone());
-        if env.storage().instance().get::<_, bool>(&vote_key).unwrap_or(false) {
+        if env
+            .storage()
+            .instance()
+            .get::<_, bool>(&vote_key)
+            .unwrap_or(false)
+        {
             return Err(GovernanceError::AlreadyVoted);
         }
         env.storage().instance().set(&vote_key, &false);
@@ -519,7 +526,10 @@ mod test {
         env.mock_all_auths();
         let signers = make_signers(&env, 5);
         let threshold: u32 = 3;
-        let contract_id = env.register(Governance, (&signers, &threshold, &DEFAULT_TIMELOCK_SECONDS));
+        let contract_id = env.register(
+            Governance,
+            (&signers, &threshold, &DEFAULT_TIMELOCK_SECONDS),
+        );
         let client = GovernanceClient::new(&env, &contract_id);
         (env, client, signers)
     }
@@ -563,6 +573,12 @@ mod test {
         let (env, client, signers) = setup();
         env.ledger().set_timestamp(1_000_000);
         let target = make_target(&env);
+        client.add_to_allow_list(
+            &signers.get(4).unwrap(),
+            &target,
+            &Symbol::new(&env, "set_something"),
+            &0,
+        );
 
         let proposal_id = client.propose(
             &signers.get(0).unwrap(),
@@ -600,6 +616,12 @@ mod test {
     fn test_veto_quorum_rejects() {
         let (env, client, signers) = setup();
         let target = make_target(&env);
+        client.add_to_allow_list(
+            &signers.get(4).unwrap(),
+            &target,
+            &Symbol::new(&env, "set_something"),
+            &0,
+        );
 
         let proposal_id = client.propose(
             &signers.get(0).unwrap(),
@@ -627,6 +649,12 @@ mod test {
     fn test_duplicate_vote_rejected() {
         let (env, client, signers) = setup();
         let target = make_target(&env);
+        client.add_to_allow_list(
+            &signers.get(2).unwrap(),
+            &target,
+            &Symbol::new(&env, "set_something"),
+            &0,
+        );
 
         let proposal_id = client.propose(
             &signers.get(0).unwrap(),
@@ -649,6 +677,12 @@ mod test {
     fn test_vote_on_non_pending_rejected() {
         let (env, client, signers) = setup();
         let target = make_target(&env);
+        client.add_to_allow_list(
+            &signers.get(0).unwrap(),
+            &target,
+            &Symbol::new(&env, "set_something"),
+            &0,
+        );
 
         let proposal_id = client.propose(
             &signers.get(0).unwrap(),
@@ -656,7 +690,7 @@ mod test {
             &Symbol::new(&env, "set_something"),
             &vec![&env],
             &Symbol::new(&env, "desc"),
-            &0,
+            &1,
         );
 
         client.vote_approve(&signers.get(1).unwrap(), &proposal_id, &0);
@@ -671,6 +705,12 @@ mod test {
     fn test_cancel_pending_proposal() {
         let (env, client, signers) = setup();
         let target = make_target(&env);
+        client.add_to_allow_list(
+            &signers.get(3).unwrap(),
+            &target,
+            &Symbol::new(&env, "set_something"),
+            &0,
+        );
 
         let proposal_id = client.propose(
             &signers.get(0).unwrap(),
@@ -694,6 +734,12 @@ mod test {
         let (env, client, signers) = setup();
         env.ledger().set_timestamp(1_000_000);
         let target = make_target(&env);
+        client.add_to_allow_list(
+            &signers.get(4).unwrap(),
+            &target,
+            &Symbol::new(&env, "set_something"),
+            &0,
+        );
 
         let proposal_id = client.propose(
             &signers.get(0).unwrap(),
@@ -707,11 +753,13 @@ mod test {
         client.vote_approve(&signers.get(2).unwrap(), &proposal_id, &0);
         client.vote_approve(&signers.get(3).unwrap(), &proposal_id, &0);
 
-        env.ledger().set_timestamp(1_000_000 + DEFAULT_TIMELOCK_SECONDS - 1);
+        env.ledger()
+            .set_timestamp(1_000_000 + DEFAULT_TIMELOCK_SECONDS - 1);
         let result = client.try_execute(&signers.get(0).unwrap(), &proposal_id, &1);
         assert_eq!(result, Err(Ok(GovernanceError::TimelockNotElapsed)));
 
-        env.ledger().set_timestamp(1_000_000 + DEFAULT_TIMELOCK_SECONDS);
+        env.ledger()
+            .set_timestamp(1_000_000 + DEFAULT_TIMELOCK_SECONDS);
         let result = client.try_execute(&signers.get(0).unwrap(), &proposal_id, &1);
         assert!(result.is_err());
         assert_ne!(result, Err(Ok(GovernanceError::TimelockNotElapsed)));
@@ -722,6 +770,12 @@ mod test {
         let (env, client, signers) = setup();
         env.ledger().set_timestamp(1_000_000);
         let target = make_target(&env);
+        client.add_to_allow_list(
+            &signers.get(1).unwrap(),
+            &target,
+            &Symbol::new(&env, "set_something"),
+            &0,
+        );
 
         let proposal_id = client.propose(
             &signers.get(0).unwrap(),
@@ -732,7 +786,8 @@ mod test {
             &0,
         );
 
-        env.ledger().set_timestamp(1_000_000 + DEFAULT_TIMELOCK_SECONDS);
+        env.ledger()
+            .set_timestamp(1_000_000 + DEFAULT_TIMELOCK_SECONDS);
         let result = client.try_execute(&signers.get(0).unwrap(), &proposal_id, &1);
         assert_eq!(result, Err(Ok(GovernanceError::NotQueued)));
     }
@@ -742,6 +797,12 @@ mod test {
         let (env, client, signers) = setup();
         env.ledger().set_timestamp(1_000_000);
         let target = make_target(&env);
+        client.add_to_allow_list(
+            &signers.get(4).unwrap(),
+            &target,
+            &Symbol::new(&env, "set_something"),
+            &0,
+        );
 
         let proposal_id = client.propose(
             &signers.get(0).unwrap(),
@@ -756,7 +817,8 @@ mod test {
         client.vote_veto(&signers.get(2).unwrap(), &proposal_id, &0);
         client.vote_veto(&signers.get(3).unwrap(), &proposal_id, &0);
 
-        env.ledger().set_timestamp(1_000_000 + DEFAULT_TIMELOCK_SECONDS);
+        env.ledger()
+            .set_timestamp(1_000_000 + DEFAULT_TIMELOCK_SECONDS);
         let result = client.try_execute(&signers.get(0).unwrap(), &proposal_id, &1);
         assert_eq!(result, Err(Ok(GovernanceError::NotQueued)));
     }
@@ -791,7 +853,10 @@ mod test {
 
         let signers = make_signers(&env, 5);
         let threshold: u32 = 3;
-        let gov_id = env.register(Governance, (&signers, &threshold, &DEFAULT_TIMELOCK_SECONDS));
+        let gov_id = env.register(
+            Governance,
+            (&signers, &threshold, &DEFAULT_TIMELOCK_SECONDS),
+        );
         let gov_client = GovernanceClient::new(&env, &gov_id);
 
         let registry_id = env.register(nbbs_project_registry::ProjectRegistry, (&gov_id,));
@@ -806,6 +871,13 @@ mod test {
             &metadata,
             &Symbol::new(&env, "VCS"),
             &Symbol::new(&env, "US"),
+            &0,
+        );
+
+        gov_client.add_to_allow_list(
+            &signers.get(4).unwrap(),
+            &registry_id,
+            &Symbol::new(&env, "approve_project"),
             &0,
         );
 
@@ -837,6 +909,12 @@ mod test {
         // Simply verify that the validation function doesn't block valid proposals
         // The actual validation guarantees are documented in governance.md
         let target = Address::generate(&_env);
+        client.add_to_allow_list(
+            &signers.get(1).unwrap(),
+            &target,
+            &Symbol::new(&_env, "some_method"),
+            &0,
+        );
         let proposal_id = client.propose(
             &signers.get(0).unwrap(),
             &target,
@@ -919,7 +997,7 @@ mod test {
         assert_eq!(proposal_id, 1);
 
         // Remove from allow-list
-        client.remove_from_allow_list(&signers.get(2).unwrap(), &target, &method, &1);
+        client.remove_from_allow_list(&signers.get(2).unwrap(), &target, &method, &0);
 
         // Second proposal should fail
         let result = client.try_propose(

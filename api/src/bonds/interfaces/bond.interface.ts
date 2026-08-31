@@ -41,9 +41,14 @@ export interface SubscriptionResponse {
   transactionHash: string;
 }
 
+export interface HolderResponse {
+  address: string;
+  balance: string;
+}
+
 export interface HolderListResponse {
   bondId: number;
-  holders: Array<{ address: string; balance: string }>;
+  holders: HolderResponse[];
   total: number;
 }
 

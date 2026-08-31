@@ -7,6 +7,9 @@ import { BondsService } from '../bonds/bonds.service';
 import { ProjectsController } from './projects.controller';
 import { BondsController } from '../bonds/bonds.controller';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { IntentGuard } from '../common/guards/intent.guard';
+import { AdminGuard } from '../common/guards/admin.guard';
+import { KycGuard } from '../common/guards/kyc.guard';
 
 describe('Data Export Endpoints', () => {
   let app: INestApplication;
@@ -39,6 +42,12 @@ describe('Data Export Endpoints', () => {
     })
       .overrideGuard(JwtAuthGuard)
       .useValue(mockJwtAuthGuard)
+      .overrideGuard(AdminGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(KycGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(IntentGuard)
+      .useValue({ canActivate: () => true })
       .compile();
 
     app = moduleRef.createNestApplication();

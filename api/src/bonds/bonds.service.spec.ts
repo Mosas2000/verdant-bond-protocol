@@ -25,6 +25,7 @@ import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { ConfigService } from '../config/config.service';
 import { BondStatusEnum, BondMaturityStatusEnum, CreditTypeEnum } from './interfaces/bond.interface';
+import { HolderIndexService } from './holder-index.service';
 
 // The holder index is exercised by its own dedicated spec; here we mock it so
 // BondsService resolves cleanly and coupon distribution falls back to a known
@@ -69,12 +70,14 @@ const signingProvider = {
   },
 };
 
-const configProvider = {
-  provide: ConfigService,
+const holderIndexProvider = {
+  provide: HolderIndexService,
   useValue: {
-    getBondIssuerAddress: jest.fn().mockReturnValue('CBONDISSUERADDRESS'),
-    getCouponEngineAddress: jest.fn().mockReturnValue('CCOUPONENGINEADDRESS'),
-    getCreditRetirementAddress: jest.fn().mockReturnValue('CCREDITRETIREMENTADDRESS'),
+    recordSubscribe: jest.fn().mockResolvedValue(undefined),
+    recordTransfer: jest.fn().mockResolvedValue(undefined),
+    getHoldersWithBalances: jest.fn().mockResolvedValue([]),
+    getHoldersForCoupon: jest.fn().mockResolvedValue(['GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF']),
+    reconcileBond: jest.fn().mockResolvedValue({ bondId: 1, holders: [], total: 0 }),
   },
 };
 
@@ -94,6 +97,7 @@ describe('BondsService', () => {
         redisProvider,
         signingProvider,
         configProvider,
+        holderIndexProvider,
       ],
     }).compile();
 
@@ -156,6 +160,7 @@ describe('BondsService', () => {
           redisProvider,
           signingProvider,
           configProvider,
+          holderIndexProvider,
         ],
       }).compile();
 
@@ -195,6 +200,7 @@ describe('BondsService', () => {
           redisProvider,
           signingProvider,
           configProvider,
+          holderIndexProvider,
         ],
       }).compile();
 
@@ -227,6 +233,7 @@ describe('BondsService', () => {
           redisProvider,
           signingProvider,
           configProvider,
+          holderIndexProvider,
         ],
       }).compile();
       const svc = moduleRef.get(BondsService);
@@ -282,6 +289,7 @@ describe('BondsService', () => {
           redisProvider,
           signingProvider,
           configProvider,
+          holderIndexProvider,
         ],
       }).compile();
 
@@ -325,6 +333,7 @@ describe('BondsService', () => {
           redisProvider,
           signingProvider,
           configProvider,
+          holderIndexProvider,
         ],
       }).compile();
       return moduleRef.get(BondsService);
@@ -401,6 +410,7 @@ describe('BondsService', () => {
           redisProvider,
           signingProvider,
           configProvider,
+          holderIndexProvider,
         ],
       }).compile();
       return moduleRef.get(BondsService);

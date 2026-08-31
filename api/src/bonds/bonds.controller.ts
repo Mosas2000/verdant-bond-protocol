@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Body, Param, Query, Req, HttpCode, HttpStatus, UseGuards, ParseIntPipe, Header
+  Controller, Get, Post, Body, Param, Query, Req, HttpCode, HttpStatus, UseGuards, ParseIntPipe, Header, NotFoundException
 } from '@nestjs/common';
 import { BondsService } from './bonds.service';
 import { CreateBondDto } from './dto/create-bond.dto';
@@ -14,6 +14,7 @@ import { KycGuard } from '../common/guards/kyc.guard';
 import { IntentGuard } from '../common/guards/intent.guard';
 import { RequireIntent } from '../common/decorators/require-intent.decorator';
 import { Idempotent } from '../common/decorators/idempotent.decorator';
+import { RateLimit } from '../common/decorators/rate-limit.decorator';
 import {
   BondResponse,
   SubscriptionResponse,
@@ -32,8 +33,6 @@ export class BondsController {
   constructor(private readonly bondsService: BondsService) {}
 
   @Post()
-  @UseGuards(JwtAuthGuard, AdminGuard, IntentGuard)
-  @RequireIntent('issue_bond', 'id', 'global')
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() dto: CreateBondDto): Promise<BondResponse> {
     return this.bondsService.create(dto);

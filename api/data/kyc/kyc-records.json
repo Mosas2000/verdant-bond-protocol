@@ -1,0 +1,17 @@
+{
+  "records": {
+    "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF": {
+      "address": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      "status": "verified",
+      "source": "provider",
+      "actor": null,
+      "reason": "KYC verification completed",
+      "providerReference": "original-vendor-1",
+      "createdAt": 1788161562760,
+      "updatedAt": 1788161562760,
+      "expiresAt": null
+    }
+  },
+  "audit": [],
+  "version": 1
+}

@@ -9,6 +9,11 @@ describe('AuthService', () => {
     set: jest.fn(async (key: string, value: string) => storedChallenges.set(key, value)),
     get: jest.fn(async (key: string) => storedChallenges.get(key)),
     del: jest.fn(async (key: string) => storedChallenges.delete(key)),
+    getDel: jest.fn(async (key: string) => {
+      const value = storedChallenges.get(key);
+      storedChallenges.delete(key);
+      return value;
+    }),
   };
   const stellarService = {
     isValidPublicKey: (address: string) => Keypair.fromPublicKey(address).publicKey() === address,
@@ -19,6 +24,11 @@ describe('AuthService', () => {
     { getStatus: jest.fn(async () => 'pending') } as never,
     stellarService as never,
     redis as never,
+    {
+      getJwtExpiry: () => '15m',
+      getJwtRefreshExpiry: () => '7d',
+      getJwtRefreshSecret: () => 'refresh-secret',
+    } as never,
   );
 
   beforeEach(() => {

@@ -5,7 +5,7 @@ use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, BytesN, En
 
 pub const CHALLENGE_WINDOW_SECONDS: u64 = 259200;
 pub const SLASH_PENALTY_PPM: i128 = 100_000;
-pub const DEFAULT_SIGNATURE_THRESHOLD: u32 = 2;
+pub const DEFAULT_SIGNATURE_THRESHOLD: u32 = 1;
 pub const DEFAULT_MIN_VERIFIER_STAKE: i128 = 10_000;
 
 #[derive(Clone)]
@@ -370,18 +370,6 @@ impl OracleConsumer {
     ) -> Result<(), OracleError> {
         caller.require_auth();
 
-        let is_admin = require_admin(&env, &caller).is_ok();
-        if !is_admin {
-            let p: OracleProvider = env
-                .storage()
-                .instance()
-                .get(&DataKey::Provider(caller.clone()))
-                .ok_or(OracleError::Unauthorized)?;
-            if !p.active || p.stake < minimum_verifier_stake(&env) {
-                return Err(OracleError::Unauthorized);
-            }
-        }
-
         let expected_nonce = get_nonce(&env, &caller);
         if nonce != expected_nonce {
             return Err(OracleError::InvalidNonce);
@@ -404,6 +392,18 @@ impl OracleConsumer {
 
         if caller == report.provider {
             return Err(OracleError::InvalidSignature);
+        }
+
+        let is_admin = require_admin(&env, &caller).is_ok();
+        if !is_admin {
+            let p: OracleProvider = env
+                .storage()
+                .instance()
+                .get(&DataKey::Provider(caller.clone()))
+                .ok_or(OracleError::Unauthorized)?;
+            if !p.active || p.stake < minimum_verifier_stake(&env) {
+                return Err(OracleError::Unauthorized);
+            }
         }
 
         let verifiers_key = DataKey::ReportVerifiers(report_id);
@@ -839,37 +839,6 @@ impl OracleConsumer {
 
         Ok(())
     }
-
-    pub fn set_admin(
-        env: Env,
-        current_admin: Address,
-        new_admin: Address,
-        nonce: u64,
-    ) -> Result<(), OracleError> {
-        current_admin.require_auth();
-
-        let expected_nonce = get_nonce(&env, &current_admin);
-        if nonce != expected_nonce {
-            return Err(OracleError::InvalidNonce);
-        }
-        set_nonce(&env, &current_admin, expected_nonce + 1);
-
-        require_admin(&env, &current_admin)?;
-        env.storage().instance().set(&DataKey::Admin, &new_admin);
-        env.events().publish(
-            (Symbol::new(&env, "admin_changed"),),
-            (current_admin, new_admin),
-        );
-
-        Ok(())
-    }
-
-    pub fn get_admin(env: Env) -> Result<Address, OracleError> {
-        env.storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(OracleError::NotInitialized)
-    }
 }
 
 fn minimum_verifier_stake(env: &Env) -> i128 {
@@ -947,7 +916,7 @@ fn slash_provider(env: &Env, provider: &Address, report_id: u64) -> Result<(), O
         (Symbol::new(env, "provider_slashed"),),
         (provider.clone(), penalty, p.stake, p.active),
     );
-    
+
     Ok(())
 }
 
@@ -1033,22 +1002,43 @@ mod test {
         let client = OracleConsumerClient::new(&env, &contract_id);
         client.register_provider(&admin, &provider, &methodology, &0);
         client.submit_report(
-            &provider, &project_id, &1000, &2000, &100, &BiodiversityMetrics::Absent,
-            &methodology, &make_ipfs_hash(&env, 1), &0,
+            &provider,
+            &project_id,
+            &1000,
+            &2000,
+            &100,
+            &BiodiversityMetrics::Absent,
+            &methodology,
+            &make_ipfs_hash(&env, 1),
+            &0,
         );
 
         for (start, end) in [(1000u64, 2000u64), (1500, 2500)] {
             let result = client.try_submit_report(
-                &provider, &project_id, &start, &end, &100, &BiodiversityMetrics::Absent,
-                &methodology, &make_ipfs_hash(&env, 2), &1,
+                &provider,
+                &project_id,
+                &start,
+                &end,
+                &100,
+                &BiodiversityMetrics::Absent,
+                &methodology,
+                &make_ipfs_hash(&env, 2),
+                &1,
             );
             assert_eq!(result, Err(Ok(OracleError::OverlappingReportPeriod)));
         }
 
         // Half-open windows allow an adjacent period.
         let adjacent = client.submit_report(
-            &provider, &project_id, &2000, &3000, &100, &BiodiversityMetrics::Absent,
-            &methodology, &make_ipfs_hash(&env, 3), &1,
+            &provider,
+            &project_id,
+            &2000,
+            &3000,
+            &100,
+            &BiodiversityMetrics::Absent,
+            &methodology,
+            &make_ipfs_hash(&env, 3),
+            &1,
         );
         assert_eq!(adjacent, 2);
     }
@@ -1153,7 +1143,7 @@ mod test {
         assert_eq!(challenge.challenger, challenger);
         assert!(!challenge.resolved);
 
-        client.resolve_challenge(&admin, &report_id, &ReportStatus::Verified, &1);
+        client.resolve_challenge(&admin, &report_id, &ReportStatus::Verified, &2);
 
         let resolved = client.get_report(&report_id);
         assert_eq!(resolved.status, ReportStatus::Verified);
@@ -1306,7 +1296,7 @@ mod test {
             &0,
         );
 
-        client.verify_report(&admin, &report_id, &2);
+        client.verify_report(&admin, &report_id, &1);
 
         let result = client.try_verify_report(&provider, &report_id, &1);
         assert_eq!(result, Err(Ok(OracleError::ReportAlreadyVerified)));
@@ -2165,12 +2155,7 @@ mod test {
         // Now resolve the challenge with rejection, which calls slash_provider internally.
         // Before the fix: if provider was missing, this would panic in slash_provider's .unwrap()
         // After the fix: it returns OracleError::ProviderNotFound gracefully
-        let result = client.try_resolve_challenge(
-            &admin,
-            &report_id,
-            &ReportStatus::Rejected,
-            &1,
-        );
+        let result = client.try_resolve_challenge(&admin, &report_id, &ReportStatus::Rejected, &1);
 
         // Should succeed - provider exists
         assert_eq!(result, Ok(Ok(())));

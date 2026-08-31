@@ -32,9 +32,6 @@ describe('Protocol Lifecycle (e2e)', () => {
   let orderId: number;
 
   beforeAll(async () => {
-    // Make sure .env is loaded
-    require('dotenv').config();
-
     const moduleRef: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();

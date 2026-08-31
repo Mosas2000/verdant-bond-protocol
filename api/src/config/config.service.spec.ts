@@ -1,7 +1,7 @@
 import { ConfigService } from './config.service';
 
-const STRONG_SECRET = 'a-very-strong-secret-that-is-definitely-over-32-characters-long';
-const STRONG_REFRESH_SECRET = 'a-very-strong-refresh-secret-over-32-characters-abc123';
+const STRONG_SECRET = 'a-very-strong-token-that-is-definitely-over-32-characters-long';
+const STRONG_REFRESH_SECRET = 'a-very-strong-refresh-token-over-32-characters-abc123';
 
 const setContractEnvs = () => {
   process.env.BOND_ISSUER_ADDRESS = 'CBOND';

@@ -1,5 +1,6 @@
 #![no_std]
 #![allow(deprecated)]
+#![allow(clippy::too_many_arguments)]
 use nbbs_oracle_consumer::Report;
 use nbbs_shared::{BiodiversityMetrics, BondError, CreditType, ReportStatus};
 use soroban_sdk::{

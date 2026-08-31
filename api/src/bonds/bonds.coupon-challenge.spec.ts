@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
+import { Keypair, nativeToScVal } from '@stellar/stellar-sdk';
 import { BondsService } from './bonds.service';
 import { OracleService } from '../oracle/oracle.service';
 import { ContractService } from '../stellar/contract.service';
@@ -9,17 +10,18 @@ import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { ConfigService } from '../config/config.service';
 import { ReportStatus } from '../oracle/interfaces/oracle.interface';
+import { HolderIndexService } from './holder-index.service';
 
 function bondsModuleWith(oracleService?: any) {
   const providers: any[] = [
     BondsService,
     {
       provide: ContractService,
-      useValue: { invokeContractMethod: jest.fn().mockResolvedValue({ result: [], transactionHash: 'x' }), simulateCall: jest.fn() },
+      useValue: { invokeContractMethod: jest.fn().mockResolvedValue({ result: nativeToScVal([], { type: 'vec' }), transactionHash: 'x' }), simulateCall: jest.fn() },
     },
     {
       provide: StellarService,
-      useValue: { getKeypairFromSecret: jest.fn().mockReturnValue({ publicKey: () => 'G_ADMIN' }) },
+      useValue: { getKeypairFromSecret: jest.fn().mockReturnValue({ publicKey: () => Keypair.random().publicKey() }) },
     },
     { provide: NonceService, useValue: { next: jest.fn().mockResolvedValue(0) } },
     {
@@ -33,6 +35,10 @@ function bondsModuleWith(oracleService?: any) {
     {
       provide: ConfigService,
       useValue: { getCouponEngineAddress: jest.fn().mockReturnValue('C'), getBondIssuerAddress: jest.fn().mockReturnValue('B') },
+    },
+    {
+      provide: HolderIndexService,
+      useValue: { getHoldersForCoupon: jest.fn().mockResolvedValue([]), getHoldersWithBalances: jest.fn().mockResolvedValue([]) },
     },
   ];
   if (oracleService) {

@@ -1,6 +1,57 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, BytesN, Env, Symbol, Vec};
 use nbbs_shared::{ProjectStatus, RegistryError};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, events::Event, vec, Address, BytesN, Env, IntoVal,
+    Symbol, Val, Vec,
+};
+
+#[derive(Clone)]
+pub enum RegistryEvent {
+    ProjectRegistered {
+        id: u64,
+        owner: Address,
+        methodology: Symbol,
+        country: Symbol,
+    },
+    ProjectApproved {
+        id: u64,
+        caller: Address,
+    },
+    ProjectRejected {
+        id: u64,
+        caller: Address,
+    },
+    AdminChanged {
+        prev: Address,
+        new: Address,
+    },
+}
+
+impl Event for RegistryEvent {
+    fn topics(&self, env: &Env) -> Vec<Val> {
+        let name = match self {
+            RegistryEvent::ProjectRegistered { .. } => "project_registered",
+            RegistryEvent::ProjectApproved { .. } => "project_approved",
+            RegistryEvent::ProjectRejected { .. } => "project_rejected",
+            RegistryEvent::AdminChanged { .. } => "admin_changed",
+        };
+        vec![&env, Symbol::new(env, name).into_val(env)]
+    }
+
+    fn data(&self, env: &Env) -> Val {
+        match self {
+            RegistryEvent::ProjectRegistered {
+                id,
+                owner,
+                methodology,
+                country,
+            } => (*id, owner.clone(), methodology.clone(), country.clone()).into_val(env),
+            RegistryEvent::ProjectApproved { id, caller } => (*id, caller.clone()).into_val(env),
+            RegistryEvent::ProjectRejected { id, caller } => (*id, caller.clone()).into_val(env),
+            RegistryEvent::AdminChanged { prev, new } => (prev.clone(), new.clone()).into_val(env),
+        }
+    }
+}
 
 #[derive(Clone)]
 #[contracttype]
@@ -127,10 +178,13 @@ impl ProjectRegistry {
             .instance()
             .set(&DataKey::Project(key), &project);
 
-        env.events().publish(
-            (Symbol::new(&env, "project_registered"),),
-            (new_id, caller.clone(), project.methodology.clone(), project.country.clone()),
-        );
+        env.events()
+            .publish_event(&RegistryEvent::ProjectRegistered {
+                id: new_id,
+                owner: caller.clone(),
+                methodology: project.methodology.clone(),
+                country: project.country.clone(),
+            });
 
         let mut owner_projects: Vec<u64> = env
             .storage()
@@ -183,10 +237,10 @@ impl ProjectRegistry {
             .instance()
             .set(&DataKey::Project(key), &project);
 
-        env.events().publish(
-            (Symbol::new(&env, "project_approved"),),
-            (project_id, caller),
-        );
+        env.events().publish_event(&RegistryEvent::ProjectApproved {
+            id: project_id,
+            caller,
+        });
 
         Ok(())
     }
@@ -229,10 +283,10 @@ impl ProjectRegistry {
             .instance()
             .set(&DataKey::Project(key), &project);
 
-        env.events().publish(
-            (Symbol::new(&env, "project_rejected"),),
-            (project_id, caller),
-        );
+        env.events().publish_event(&RegistryEvent::ProjectRejected {
+            id: project_id,
+            caller,
+        });
 
         Ok(())
     }
@@ -334,6 +388,21 @@ impl ProjectRegistry {
         }
     }
 
+    /// Returns the methodology symbol for a project keyed by its `BytesN<32>`
+    /// identifier, or an empty symbol when no such project exists. The
+    /// `BondIssuer` cross-invokes this on issuance to enforce methodology /
+    /// credit-type compatibility without coupling to the numeric internal id.
+    pub fn get_project_methodology(env: Env, key: BytesN<32>) -> Symbol {
+        match env
+            .storage()
+            .instance()
+            .get::<_, Project>(&DataKey::Project(key))
+        {
+            Some(project) => project.methodology,
+            None => Symbol::new(&env, ""),
+        }
+    }
+
     pub fn project_key(env: Env, project_id: u64) -> BytesN<32> {
         project_id_to_bytes(&env, project_id)
     }
@@ -404,18 +473,13 @@ impl ProjectRegistry {
             return Err(RegistryError::InvalidArgument);
         }
         let key = DataKey::ProjectDocuments(project_id);
-        env.storage()
-            .instance()
-            .set(&key, &document_hashes);
+        env.storage().instance().set(&key, &document_hashes);
         Ok(())
     }
 
     pub fn get_project_documents(env: Env, project_id: u64) -> Vec<BytesN<32>> {
         let key = DataKey::ProjectDocuments(project_id);
-        env.storage()
-            .instance()
-            .get(&key)
-            .unwrap_or(vec![&env])
+        env.storage().instance().get(&key).unwrap_or(vec![&env])
     }
 
     pub fn set_admin(
@@ -434,10 +498,10 @@ impl ProjectRegistry {
 
         require_admin(&env, &current_admin)?;
         env.storage().instance().set(&DataKey::Admin, &new_admin);
-        env.events().publish(
-            (Symbol::new(&env, "admin_changed"),),
-            (current_admin, new_admin),
-        );
+        env.events().publish_event(&RegistryEvent::AdminChanged {
+            prev: current_admin,
+            new: new_admin,
+        });
 
         Ok(())
     }

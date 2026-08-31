@@ -3,14 +3,14 @@ import { ContractService } from '../stellar/contract.service';
 import { RedisService } from '../common/services/redis.service';
 import { ConfigService } from '../config/config.service';
 import { ConflictException } from '@nestjs/common';
-import { nativeToScVal, scValToNative } from '@stellar/stellar-sdk';
+import { nativeToScVal, scValToNative, Keypair } from '@stellar/stellar-sdk';
 
 // Force the in-memory durable store regardless of the test environment.
 process.env.NODE_ENV = 'test';
 process.env.HOLDER_INDEX_STORE = 'memory';
 
-const A = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
-const B = 'GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
+const A = Keypair.random().publicKey();
+const B = Keypair.random().publicKey();
 
 function makeService(redis: any, contract: any) {
   const config = { getBondIssuerAddress: jest.fn().mockReturnValue('BOND') };
@@ -55,7 +55,7 @@ describe('HolderIndexService', () => {
   });
 
   it('returns holder balances and prunes zero-balance holders', async () => {
-    const service = makeService({ sAdd: jest.fn() }, contract);
+    const service = makeService({ sAdd: jest.fn().mockResolvedValue(undefined) }, contract);
     balanceMap.set(A, 100n);
     balanceMap.set(B, 0n);
 
@@ -68,7 +68,7 @@ describe('HolderIndexService', () => {
   });
 
   it('discovers out-of-band transfers via reconciliation', async () => {
-    const service = makeService({ sAdd: jest.fn() }, contract);
+    const service = makeService({ sAdd: jest.fn().mockResolvedValue(undefined) }, contract);
     // A was known through the API, but a direct contract transfer moved A's
     // balance to B (which the API never recorded).
     balanceMap.set(A, 0n);
@@ -83,14 +83,14 @@ describe('HolderIndexService', () => {
   });
 
   it('refuses coupon distribution on an unseeded, empty index (strict)', async () => {
-    const service = makeService({ sAdd: jest.fn() }, contract);
+    const service = makeService({ sAdd: jest.fn().mockResolvedValue(undefined) }, contract);
     await expect(service.getHoldersForCoupon(1, { requireFresh: true })).rejects.toBeInstanceOf(
       ConflictException,
     );
   });
 
   it('returns reconciled holders for coupon distribution after seeding', async () => {
-    const service = makeService({ sAdd: jest.fn() }, contract);
+    const service = makeService({ sAdd: jest.fn().mockResolvedValue(undefined) }, contract);
     balanceMap.set(A, 50n);
 
     await service.recordSubscribe(1, A);

@@ -1,16 +1,17 @@
 import { BondsController } from './bonds.controller';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { AdminGuard } from '../common/guards/admin.guard';
+import { IntentGuard } from '../common/guards/intent.guard';
 
 describe('BondsController guards', () => {
   const GUARDS_METADATA = '__guards__';
 
-  it('guards POST /:id/sweep-undistributed with JWT + Admin guards', () => {
+  it('guards POST /:id/sweep-undistributed with JWT + Admin + Intent guards', () => {
     const guards: unknown[] = Reflect.getMetadata(
       GUARDS_METADATA,
       BondsController.prototype.sweepUndistributed,
     );
-    expect(guards).toEqual([JwtAuthGuard, AdminGuard]);
+    expect(guards).toEqual([JwtAuthGuard, AdminGuard, IntentGuard]);
   });
 
   it('exposes GET /:id/undistributed as a read-only public endpoint', () => {

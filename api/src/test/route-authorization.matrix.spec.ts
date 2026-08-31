@@ -49,7 +49,8 @@ function enumerateHandlers(controller: any): Map<string, { httpMethod: string; p
     const httpMethodNumber: number | undefined = Reflect.getMetadata('method', descriptor.value);
     if (httpMethodNumber === undefined) return;
     const handlerPath: string = Reflect.getMetadata('path', descriptor.value) || '';
-    const fullPath = [basePath, handlerPath].filter(Boolean).join('/');
+    const normalizedHandlerPath = handlerPath === '/' ? '' : handlerPath;
+    const fullPath = [basePath, normalizedHandlerPath].filter(Boolean).join('/');
     handlers.set(name, {
       httpMethod: METHOD_BY_NUMBER[httpMethodNumber] ?? String(httpMethodNumber),
       path: fullPath,

@@ -1,10 +1,13 @@
 import { Test } from '@nestjs/testing';
-import { scValToNative } from '@stellar/stellar-sdk';
+import { scValToNative, Keypair } from '@stellar/stellar-sdk';
 
 jest.mock('@stellar/stellar-sdk', () => {
   const actual = jest.requireActual('@stellar/stellar-sdk');
   return { ...actual, scValToNative: jest.fn((x: any) => x) };
 });
+
+const PROVIDER = Keypair.random().publicKey();
+const CHALLENGER = Keypair.random().publicKey();
 
 import { OracleService } from './oracle.service';
 import { ContractService } from '../stellar/contract.service';
@@ -37,7 +40,7 @@ function reportScVal(id: number, provider: string, statusIndex: number): any[] {
 function challengeScVal(reportId: number, resolved: boolean, resolutionIndex: number): any {
   return {
     report_id: BigInt(reportId),
-    challenger: 'G_CHALLENGER',
+    challenger: CHALLENGER,
     counter_evidence_hash: Buffer.from('c0ffee'.padEnd(64, '0'), 'hex'),
     submitted_at: BigInt(1699990000),
     resolved,
@@ -74,7 +77,7 @@ describe('OracleService challenge review (#oracle-challenge)', () => {
       [3, ReportStatus.Rejected],
     ];
     for (const [index, expected] of expectations) {
-      simulateCall.mockResolvedValue(reportScVal(1, 'G_PROV', index));
+      simulateCall.mockResolvedValue(reportScVal(1, PROVIDER, index));
       const report = await service.getReport(1);
       expect(report.status).toBe(expected);
     }
@@ -82,7 +85,7 @@ describe('OracleService challenge review (#oracle-challenge)', () => {
 
   it('returns the full challenge state for a report, including resolution', async () => {
     simulateCall.mockImplementation((opts: any) => {
-      if (opts.method === 'get_report') return reportScVal(7, 'G_PROV', 2); // Challenged
+      if (opts.method === 'get_report') return reportScVal(7, PROVIDER, 2); // Challenged
       if (opts.method === 'get_challenge_history') {
         return [challengeScVal(7, true, 3), challengeScVal(99, false, 0)];
       }
@@ -96,7 +99,7 @@ describe('OracleService challenge review (#oracle-challenge)', () => {
     expect(state.challenges).toHaveLength(1);
     expect(state.challenges[0].reportId).toBe(7);
     expect(state.challenges[0].counterEvidenceHash).toBe('c0ffee'.padEnd(64, '0'));
-    expect(state.challenges[0].challengerAddress).toBe('G_CHALLENGER');
+    expect(state.challenges[0].challengerAddress).toBe(CHALLENGER);
     expect(state.challenges[0].resolved).toBe(true);
     expect(state.challenges[0].resolution).toBe(ReportStatus.Rejected);
   });
@@ -106,9 +109,9 @@ describe('OracleService challenge review (#oracle-challenge)', () => {
       if (opts.method === 'get_project_reports') return [BigInt(1), BigInt(2)];
       if (opts.method === 'get_report') {
         // report 1 = Challenged, report 2 = Verified
-        return opts.args[0].value() === 1n
-          ? reportScVal(1, 'G_PROV', 2)
-          : reportScVal(2, 'G_PROV', 1);
+        return opts.args[0].value().toString() === '1'
+          ? reportScVal(1, PROVIDER, 2)
+          : reportScVal(2, PROVIDER, 1);
       }
       if (opts.method === 'get_challenge_history') return [challengeScVal(1, false, 0)];
       return [];
@@ -126,7 +129,7 @@ describe('OracleService challenge review (#oracle-challenge)', () => {
         if (opts.method === 'get_project_reports') return statusIndexes.map((_, i) => BigInt(i + 1));
         if (opts.method === 'get_report') {
           const id = Number(opts.args[0].value());
-          return reportScVal(id, 'G_PROV', statusIndexes[id - 1]);
+          return reportScVal(id, PROVIDER, statusIndexes[id - 1]);
         }
         return [];
       });
@@ -171,7 +174,7 @@ describe('OracleService challenge review (#oracle-challenge)', () => {
         if (opts.method === 'get_project_reports') return [1n, 2n];
         if (opts.method === 'get_report') {
           const id = Number(opts.args[0].value());
-          const report = reportScVal(id, 'G_PROV', 1);
+          const report = reportScVal(id, PROVIDER, 1);
           if (id === 2) {
             report[3] = BigInt(1700086400);
             report[4] = BigInt(1700172800);

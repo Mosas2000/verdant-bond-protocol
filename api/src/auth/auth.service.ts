@@ -87,6 +87,8 @@ export class AuthService {
     challengeTransaction.sign(serverKeypair);
     const challenge = challengeTransaction.toXDR();
 
+    const timestamp = Date.now();
+
     const stored: StoredChallenge = {
       challenge,
       nonce,

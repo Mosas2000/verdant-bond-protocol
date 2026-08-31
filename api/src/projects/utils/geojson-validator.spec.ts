@@ -5,7 +5,7 @@ import {
 } from './geojson-validator';
 
 describe('GeoJSON Boundary Validator (#112)', () => {
-  // Approx 100 ha square near equator: ~0.09 deg x 0.09 deg
+  // Approx 10,000 ha square near equator: ~0.09 deg x 0.09 deg
   const validPolygon = {
     type: 'Polygon',
     coordinates: [
@@ -23,7 +23,7 @@ describe('GeoJSON Boundary Validator (#112)', () => {
     const result = validateGeoJsonBoundary(validPolygon);
     expect(result.valid).toBe(true);
     expect(result.geometry.type).toBe('Polygon');
-    expect(result.areaHa).toBeGreaterThan(950); // ~995 ha
+    expect(result.areaHa).toBeGreaterThan(950); // ~10,000 ha
     expect(result.boundaryHash).toBeDefined();
   });
 
@@ -111,12 +111,12 @@ describe('GeoJSON Boundary Validator (#112)', () => {
   });
 
   it('verifies area sanity against totalAreaHa within tolerance', () => {
-    // validPolygon area is ~995 ha
-    const matchingArea = 990;
+    // validPolygon area is ~10,000 ha (0.09 deg x 0.09 deg near the equator)
+    const matchingArea = 9900;
     const result = validateGeoJsonBoundary(validPolygon, matchingArea);
     expect(result.valid).toBe(true);
 
-    const mismatchedArea = 50; // reported 50 ha vs ~995 ha boundary
+    const mismatchedArea = 50; // reported 50 ha vs ~10,000 ha boundary
     expect(() => validateGeoJsonBoundary(validPolygon, mismatchedArea)).toThrow(InvalidGeoJsonError);
     expect(() => validateGeoJsonBoundary(validPolygon, mismatchedArea)).toThrow('differs from reported totalAreaHa');
   });
