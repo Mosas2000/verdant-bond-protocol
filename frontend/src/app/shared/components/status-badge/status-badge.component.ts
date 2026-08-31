@@ -11,6 +11,7 @@ const STATUS_COLORS: Record<string, string> = {
   Approved: '#22c55e',
   Inactive: '#6b7280',
   Open: '#22c55e',
+  PartiallyFilled: '#f59e0b',
   Filled: '#3b82f6',
   Cancelled: '#6b7280',
   Expired: '#ef4444',

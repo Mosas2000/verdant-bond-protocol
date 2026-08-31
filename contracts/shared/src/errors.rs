@@ -31,6 +31,7 @@ pub enum OracleError {
     InsufficientStake = 9,
     InvalidSignature = 10,
     InvalidResolution = 11,
+    OverlappingReportPeriod = 12,
 }
 
 #[derive(Clone, Debug, PartialEq)]

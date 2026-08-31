@@ -82,3 +82,18 @@ export interface SweepUndistributedResponse {
   swept: string;
   transactionHash: string;
 }
+
+/**
+ * Consolidated, atomically-fetched bond detail (issue #4). A single call returns
+ * the bond summary, holders, coupon undistributed total, and maturity status so
+ * the frontend can refresh every panel together and never render a mix of
+ * pre- and post-mutation data. `loadedAt` is the server timestamp used by the
+ * client refresh model to detect staleness.
+ */
+export interface BondDetailResponse {
+  bond: BondResponse;
+  holders: HolderResponse[];
+  coupon: { undistributedTotal: string };
+  maturity: { reached: boolean; date: number; secondsUntil: number };
+  loadedAt: string;
+}

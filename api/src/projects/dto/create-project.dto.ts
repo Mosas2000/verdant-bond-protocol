@@ -60,6 +60,10 @@ export class CreateProjectDto {
   @IsString()
   description?: string;
 
+  @IsOptional()
+  @IsObject()
+  boundary?: Record<string, any>;
+
   @IsNumber()
   @IsOptional()
   nonce?: number;

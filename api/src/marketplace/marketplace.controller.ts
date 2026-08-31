@@ -1,15 +1,18 @@
 import {
   Controller, Get, Post, Delete, Body, Param, Query, Req,
-  HttpCode, HttpStatus, ParseIntPipe,
+  HttpCode, HttpStatus, ParseIntPipe, UseGuards,
 } from '@nestjs/common';
 import { DexService } from './dex.service';
 import { LiquidityService } from './liquidity.service';
 import { StellarService } from '../stellar/stellar.service';
+import { DexReconciliationService, ReconciliationReport } from './dex.reconciliation.service';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { ListBondDto } from './dto/list-bond.dto';
 import { BuyBondDto } from './dto/buy-bond.dto';
 import { DepositQuoteDto } from './dto/deposit-quote.dto';
 import { WithdrawQuoteDto } from './dto/withdraw-quote.dto';
 import { QuoteBalanceQueryDto } from './dto/quote-balance-query.dto';
+import { RateLimit } from '../common/decorators/rate-limit.decorator';
 import {
   OrderResponse,
   PriceFeedResponse,
@@ -21,6 +24,7 @@ import {
 import { PaginatedResponse, PaginationDto } from '../common/dto/pagination.dto';
 import { toBigIntString } from '../common/utils';
 import { listSupportedQuoteAssets, QuoteAssetConfig } from './quote-assets';
+import { Idempotent } from '../common/decorators/idempotent.decorator';
 
 @Controller('marketplace')
 export class MarketplaceController {
@@ -28,6 +32,7 @@ export class MarketplaceController {
     private readonly dexService: DexService,
     private readonly liquidityService: LiquidityService,
     private readonly stellarService: StellarService,
+    private readonly reconciliation: DexReconciliationService,
   ) {}
 
   /**
@@ -54,72 +59,83 @@ export class MarketplaceController {
   }
 
   @Post('list')
+  @UseGuards(JwtAuthGuard)
+  @Idempotent()
   @HttpCode(HttpStatus.CREATED)
   async listBondTokens(
     @Body() dto: ListBondDto,
     @Req() req: any,
   ): Promise<OrderResponse> {
-    const sellerAddress = req.headers['x-wallet-address'] as string || '';
+    const sellerAddress = req.user.walletAddress;
     return this.dexService.listBondTokens(dto, sellerAddress);
   }
 
   @Post('buy')
+  @UseGuards(JwtAuthGuard)
+  @Idempotent()
   @HttpCode(HttpStatus.OK)
   async buyBondTokens(
     @Body() dto: BuyBondDto,
     @Req() req: any,
   ): Promise<OrderResponse> {
-    const buyerAddress = req.headers['x-wallet-address'] as string || '';
+    const buyerAddress = req.user.walletAddress;
     return this.dexService.buyBondTokens(dto, buyerAddress);
   }
 
   @Get('quote-balance')
+  @UseGuards(JwtAuthGuard)
   async getQuoteBalance(
     @Query() query: QuoteBalanceQueryDto,
     @Req() req: any,
   ): Promise<QuoteBalanceResponse> {
-    const address = req.headers['x-wallet-address'] as string || '';
+    const address = req.user.walletAddress;
     return this.dexService.getQuoteBalance(address, query.asset ?? 'USDC');
   }
 
   @Get('wallet-balance')
+  @UseGuards(JwtAuthGuard)
   async getWalletBalance(
     @Query() query: QuoteBalanceQueryDto,
     @Req() req: any,
   ): Promise<QuoteBalanceResponse> {
-    const address = req.headers['x-wallet-address'] as string || '';
+    const address = req.user.walletAddress;
     const asset = query.asset ?? 'USDC';
     const balanceStr = await this.stellarService.getBalance(address, asset);
     return { address, asset, balance: balanceStr };
   }
 
   @Post('deposit')
+  @UseGuards(JwtAuthGuard)
+  @Idempotent()
   @HttpCode(HttpStatus.OK)
   async depositQuote(
     @Body() dto: DepositQuoteDto,
     @Req() req: any,
   ): Promise<QuoteTransactionResponse> {
-    const address = req.headers['x-wallet-address'] as string || '';
+    const address = req.user.walletAddress;
     return this.dexService.depositQuote(dto, address);
   }
 
   @Post('withdraw')
+  @UseGuards(JwtAuthGuard)
+  @Idempotent()
   @HttpCode(HttpStatus.OK)
   async withdrawQuote(
     @Body() dto: WithdrawQuoteDto,
     @Req() req: any,
   ): Promise<QuoteTransactionResponse> {
-    const address = req.headers['x-wallet-address'] as string || '';
+    const address = req.user.walletAddress;
     return this.dexService.withdrawQuote(dto, address);
   }
 
   @Delete('orders/:id')
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
   async cancelOrder(
     @Param('id', ParseIntPipe) id: number,
     @Req() req: any,
   ): Promise<void> {
-    const callerAddress = req.headers['x-wallet-address'] as string || '';
+    const callerAddress = req.user.walletAddress;
     return this.dexService.cancelOrder(id, callerAddress);
   }
 
@@ -151,5 +167,44 @@ export class MarketplaceController {
     @Query('amount') amount: number,
   ): Promise<SlippageResponse> {
     return this.liquidityService.calculateSlippage(bondId, Number(amount));
+  }
+
+  /**
+   * Operator reconciliation surface (#recon). Marketplace endpoints are
+   * wallet-header authenticated, so these are operator-tooling routes gated by
+   * the same `x-wallet-address` convention rather than a JWT.
+   */
+  @Post('reconciliation/run')
+  @RateLimit({ type: 'mutation' })
+  @HttpCode(HttpStatus.OK)
+  async runReconciliation(
+    @Body() body: { wallets?: string[]; assets?: string[]; maxOrderScan?: number },
+  ): Promise<ReconciliationReport> {
+    return this.reconciliation.reconcile({
+      wallets: body?.wallets,
+      assets: body?.assets as any,
+      maxOrderScan: body?.maxOrderScan,
+    });
+  }
+
+  @Get('reconciliation/mismatches')
+  async listReconciliationMismatches(
+    @Query('limit') limit?: string,
+  ): Promise<unknown[]> {
+    return this.reconciliation.listMismatches(limit ? Number(limit) : 50);
+  }
+
+  @Post('reconciliation/repair')
+  @RateLimit({ type: 'mutation' })
+  @HttpCode(HttpStatus.OK)
+  async repairReconciliation(
+    @Body() body: { report?: ReconciliationReport },
+  ): Promise<{ correlationId: string; repaired: number; actions: string[] }> {
+    const report = body?.report ?? (await this.reconciliation.getLastReport());
+    if (!report) {
+      throw new NotFoundException('No reconciliation report available to repair');
+    }
+    const actions = await this.reconciliation.repair(report);
+    return { correlationId: report.correlationId, repaired: actions.length, actions };
   }
 }

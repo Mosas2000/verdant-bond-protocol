@@ -14,7 +14,22 @@ export interface Bond {
   transactionHash?: string;
 }
 
+export interface CreateBondDto {
+  projectId: string;
+  faceValue: number;
+  couponSchedule: number[];
+  creditType: Bond['creditType'];
+  maturityDate: number;
+  totalSupply: number;
+}
+
 export interface HeldBond extends Bond {
+  balance: string;
+}
+
+/** A single bond holder and their token balance (issue #4 detail refresh). */
+export interface HolderResponse {
+  address: string;
   balance: string;
 }
 
@@ -33,6 +48,20 @@ export interface Project {
   transactionHash?: string;
 }
 
+export interface ProjectProvenanceEvent {
+  type: 'registration' | 'review' | 'report' | 'bond' | 'document';
+  occurredAt: string | null;
+  title: string;
+  status: 'complete' | 'pending' | 'stale';
+  reference?: string;
+  evidenceUrl?: string;
+}
+
+export interface ProjectProvenance {
+  projectId: number;
+  events: ProjectProvenanceEvent[];
+}
+
 export type QuoteAsset = 'USDC' | 'XLM';
 
 export interface Order {
@@ -44,8 +73,14 @@ export interface Order {
   quoteAsset: QuoteAsset;
   status: 'Open' | 'PartiallyFilled' | 'Filled' | 'Cancelled' | 'Expired';
   createdAt: string;
-  /** Only present on the response to a just-submitted list/buy; absent on reads. */
-  transactionHash?: string;
+  expiresAt: string;
+}
+
+export interface OrderQueryParams {
+  bondId?: number;
+  status?: Order['status'];
+  page?: number;
+  limit?: number;
 }
 
 export interface PaginatedResponse<T> {

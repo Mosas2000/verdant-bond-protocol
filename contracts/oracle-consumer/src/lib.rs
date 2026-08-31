@@ -54,6 +54,7 @@ pub struct Report {
     pub status: ReportStatus,
     pub submitted_at: u64,
     pub verified_at: u64,
+    pub provider_stake_at_verification: Option<i128>,
 }
 
 #[derive(Clone)]
@@ -280,6 +281,29 @@ impl OracleConsumer {
             }
         }
 
+        // Reporting windows are half-open: [period_start, period_end). This
+        // permits adjacent reports while rejecting exact and partial overlap
+        // from the same provider/methodology for the same project.
+        let existing_ids: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProjectReports(project_id.clone()))
+            .unwrap_or(vec![&env]);
+        for existing_id in existing_ids.iter() {
+            let existing: Report = env
+                .storage()
+                .instance()
+                .get(&DataKey::Report(existing_id))
+                .ok_or(OracleError::ReportNotFound)?;
+            if existing.provider == provider
+                && existing.methodology == methodology
+                && period_start < existing.period_end
+                && existing.period_start < period_end
+            {
+                return Err(OracleError::OverlappingReportPeriod);
+            }
+        }
+
         let count: u64 = env
             .storage()
             .instance()
@@ -304,6 +328,7 @@ impl OracleConsumer {
             status: ReportStatus::Pending,
             submitted_at: now,
             verified_at: 0,
+            provider_stake_at_verification: None,
         };
 
         env.storage()
@@ -414,8 +439,16 @@ impl OracleConsumer {
             .unwrap_or(DEFAULT_SIGNATURE_THRESHOLD);
 
         if qualifying_verifier_count(&env, &verifiers) >= threshold {
+            let provider_stake = env
+                .storage()
+                .instance()
+                .get::<_, OracleProvider>(&DataKey::Provider(report.provider.clone()))
+                .map(|p| p.stake)
+                .unwrap_or(0);
+                
             report.status = ReportStatus::Verified;
             report.verified_at = env.ledger().timestamp();
+            report.provider_stake_at_verification = Some(provider_stake);
             env.storage()
                 .instance()
                 .set(&DataKey::Report(report_id), &report);
@@ -996,6 +1029,38 @@ mod test {
         let project_reports = client.get_project_reports(&project_id);
         assert_eq!(project_reports.len(), 1);
         assert_eq!(project_reports.get(0).unwrap(), report_id);
+    }
+
+    #[test]
+    fn test_report_period_overlap_rules() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let provider = Address::generate(&env);
+        let project_id = create_project_id(&env, 7);
+        let methodology = Symbol::new(&env, "verra_vcs");
+        let contract_id = env.register(OracleConsumer, (admin.clone(),));
+        let client = OracleConsumerClient::new(&env, &contract_id);
+        client.register_provider(&admin, &provider, &methodology, &0);
+        client.submit_report(
+            &provider, &project_id, &1000, &2000, &100, &BiodiversityMetrics::Absent,
+            &methodology, &make_ipfs_hash(&env, 1), &0,
+        );
+
+        for (start, end) in [(1000u64, 2000u64), (1500, 2500)] {
+            let result = client.try_submit_report(
+                &provider, &project_id, &start, &end, &100, &BiodiversityMetrics::Absent,
+                &methodology, &make_ipfs_hash(&env, 2), &1,
+            );
+            assert_eq!(result, Err(Ok(OracleError::OverlappingReportPeriod)));
+        }
+
+        // Half-open windows allow an adjacent period.
+        let adjacent = client.submit_report(
+            &provider, &project_id, &2000, &3000, &100, &BiodiversityMetrics::Absent,
+            &methodology, &make_ipfs_hash(&env, 3), &1,
+        );
+        assert_eq!(adjacent, 2);
     }
 
     #[test]
@@ -2277,5 +2342,45 @@ mod test {
                 }
             }
         }
+    }
+    #[test]
+    fn test_provider_stake_snapshot() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let provider = Address::generate(&env);
+        let project_id = create_project_id(&env, 1);
+        let contract_id = env.register(OracleConsumer, (admin.clone(),));
+        let client = OracleConsumerClient::new(&env, &contract_id);
+        
+        client.register_provider(&admin, &provider, &Symbol::new(&env, "verra"), &0);
+        client.add_stake(&provider, &50000, &0);
+        
+        let report_id = client.submit_report(
+            &provider,
+            &project_id,
+            &1000,
+            &2000,
+            &100,
+            &BiodiversityMetrics::Absent,
+            &Symbol::new(&env, "verra"),
+            &make_ipfs_hash(&env, 1),
+            &1
+        );
+        
+        client.set_signature_threshold(&admin, &1u32, &1);
+        client.verify_report(&admin, &report_id, &2);
+        
+        let report_verified = client.get_report(&report_id);
+        assert_eq!(report_verified.provider_stake_at_verification, Some(50000));
+        
+        // Stake change/slash after verification
+        client.slash_provider(&admin, &provider, &report_id, &0);
+        let p_after = client.get_provider(&provider);
+        assert_eq!(p_after.stake, 50000 - SLASH_PENALTY_PPM);
+        
+        let report_after_slash = client.get_report(&report_id);
+        assert_eq!(report_after_slash.provider_stake_at_verification, Some(50000));
+        assert_eq!(report_after_slash.status, ReportStatus::Verified);
     }
 }
