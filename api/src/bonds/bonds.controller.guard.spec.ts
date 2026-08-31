@@ -69,13 +69,33 @@ describe('BondsController authorization (behavioral)', () => {
     });
   });
 
-  describe('POST /bonds (public mutation)', () => {
-    it('reaches the service even for anonymous callers', async () => {
-      mockBondsService.create.mockResolvedValue({ id: 1 } as any);
+  describe('POST /bonds (admin-only issuance)', () => {
+    const body = { projectId: 'p', faceValue: 1, couponSchedule: [1], creditType: 'Carbon', maturityDate: 2, totalSupply: 1 };
+
+    it('rejects anonymous callers before the service is touched', async () => {
       await request(app.getHttpServer())
         .post('/bonds')
         .set('x-test-role', 'anon' as TestRole)
-        .send({ projectId: 'p', faceValue: 1, couponSchedule: [1], creditType: 'Carbon', maturityDate: 2, totalSupply: 1 })
+        .send(body)
+        .expect(401);
+      expect(bondsService.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects authenticated non-admin callers', async () => {
+      await request(app.getHttpServer())
+        .post('/bonds')
+        .set('x-test-role', 'user' as TestRole)
+        .send(body)
+        .expect(401);
+      expect(bondsService.create).not.toHaveBeenCalled();
+    });
+
+    it('allows the admin and reaches the service', async () => {
+      mockBondsService.create.mockResolvedValue({ id: 1 } as any);
+      await request(app.getHttpServer())
+        .post('/bonds')
+        .set('x-test-role', 'admin' as TestRole)
+        .send(body)
         .expect(201);
       expect(bondsService.create).toHaveBeenCalled();
     });

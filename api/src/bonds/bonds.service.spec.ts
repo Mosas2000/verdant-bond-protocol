@@ -1,6 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
-import { xdr, scValToNative, nativeToScVal } from '@stellar/stellar-sdk';
+import { xdr, scValToNative, nativeToScVal, Address } from '@stellar/stellar-sdk';
 
 jest.mock('@redis/client', () => {
   const mockClient = {
@@ -17,6 +17,7 @@ jest.mock('@redis/client', () => {
 });
 
 import { BondsService } from './bonds.service';
+import { HolderIndexService } from './holder-index.service';
 import { ContractException } from '../stellar/contract-errors';
 import { ContractService } from '../stellar/contract.service';
 import { StellarService } from '../stellar/stellar.service';
@@ -69,12 +70,17 @@ const signingProvider = {
   },
 };
 
-const configProvider = {
-  provide: ConfigService,
+const holderIndexProvider = {
+  provide: HolderIndexService,
   useValue: {
-    getBondIssuerAddress: jest.fn().mockReturnValue('CBONDISSUERADDRESS'),
-    getCouponEngineAddress: jest.fn().mockReturnValue('CCOUPONENGINEADDRESS'),
-    getCreditRetirementAddress: jest.fn().mockReturnValue('CCREDITRETIREMENTADDRESS'),
+    recordSubscribe: jest.fn().mockResolvedValue(undefined),
+    recordTransfer: jest.fn().mockResolvedValue(undefined),
+    getHoldersWithBalances: jest.fn().mockResolvedValue([]),
+    getHoldersForCoupon: jest
+      .fn()
+      .mockResolvedValue(['GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF']),
+    reconcileBond: jest.fn().mockResolvedValue({ bondId: 1, holders: [], total: 0 }),
+    reindexAll: jest.fn().mockResolvedValue({}),
   },
 };
 
@@ -94,6 +100,7 @@ describe('BondsService', () => {
         redisProvider,
         signingProvider,
         configProvider,
+        holderIndexProvider,
       ],
     }).compile();
 
@@ -156,6 +163,7 @@ describe('BondsService', () => {
           redisProvider,
           signingProvider,
           configProvider,
+          holderIndexProvider,
         ],
       }).compile();
 
@@ -195,6 +203,7 @@ describe('BondsService', () => {
           redisProvider,
           signingProvider,
           configProvider,
+          holderIndexProvider,
         ],
       }).compile();
 
@@ -227,6 +236,7 @@ describe('BondsService', () => {
           redisProvider,
           signingProvider,
           configProvider,
+          holderIndexProvider,
         ],
       }).compile();
       const svc = moduleRef.get(BondsService);
@@ -282,6 +292,7 @@ describe('BondsService', () => {
           redisProvider,
           signingProvider,
           configProvider,
+          holderIndexProvider,
         ],
       }).compile();
 
@@ -325,6 +336,7 @@ describe('BondsService', () => {
           redisProvider,
           signingProvider,
           configProvider,
+          holderIndexProvider,
         ],
       }).compile();
       return moduleRef.get(BondsService);
@@ -401,6 +413,7 @@ describe('BondsService', () => {
           redisProvider,
           signingProvider,
           configProvider,
+          holderIndexProvider,
         ],
       }).compile();
       return moduleRef.get(BondsService);
@@ -429,6 +442,248 @@ describe('BondsService', () => {
 
       expect(bond.maturityStatus).toBe('Matured');
       expect(bond.status).toBe('Matured');
+    });
+  });
+
+  describe('getClaimableCredits (aggregate)', () => {
+    const WALLET = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
+
+    it('reads claimable_credits per held bond with the correct arg order', async () => {
+      const contractService = {
+        simulateCall: jest
+          .fn()
+          .mockResolvedValue(nativeToScVal(BigInt(250), { type: 'i128' })),
+      };
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          BondsService,
+          { provide: ContractService, useValue: contractService },
+          { provide: StellarService, useValue: {} },
+          { provide: NonceService, useValue: { next: jest.fn() } },
+          redisProvider,
+          signingProvider,
+          configProvider,
+          holderIndexProvider,
+        ],
+      }).compile();
+      const svc = moduleRef.get(BondsService);
+      jest.spyOn(svc, 'findHeldByAddress' as any).mockResolvedValue([{ id: 1 }]);
+
+      const result = await svc.getClaimableCredits(WALLET);
+
+      const [options] = contractService.simulateCall.mock.calls[0];
+      expect(options.contractAddress).toBe('CCOUPONENGINEADDRESS');
+      expect(options.method).toBe('claimable_credits');
+      expect(scValToNative(options.args[0])).toBe(BigInt(1));
+      expect(options.args[1]).toEqual(Address.fromString(WALLET).toScVal());
+      expect(result).toEqual([{ bondId: 1, amount: '250' }]);
+    });
+
+    it('skips bonds whose coupon engine call fails (best effort)', async () => {
+      const contractService = {
+        simulateCall: jest
+          .fn()
+          .mockRejectedValueOnce(new Error('boom'))
+          .mockResolvedValueOnce(nativeToScVal(BigInt(99), { type: 'i128' })),
+      };
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          BondsService,
+          { provide: ContractService, useValue: contractService },
+          { provide: StellarService, useValue: {} },
+          { provide: NonceService, useValue: { next: jest.fn() } },
+          redisProvider,
+          signingProvider,
+          configProvider,
+          holderIndexProvider,
+        ],
+      }).compile();
+      const svc = moduleRef.get(BondsService);
+      jest
+        .spyOn(svc, 'findHeldByAddress' as any)
+        .mockResolvedValue([{ id: 1 }, { id: 2 }]);
+
+      const result = await svc.getClaimableCredits(WALLET);
+
+      expect(result).toEqual([{ bondId: 2, amount: '99' }]);
+    });
+
+    it('rejects an invalid wallet address', async () => {
+      const contractService = { simulateCall: jest.fn() };
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          BondsService,
+          { provide: ContractService, useValue: contractService },
+          { provide: StellarService, useValue: {} },
+          { provide: NonceService, useValue: { next: jest.fn() } },
+          redisProvider,
+          signingProvider,
+          configProvider,
+          holderIndexProvider,
+        ],
+      }).compile();
+      const svc = moduleRef.get(BondsService);
+
+      await expect(svc.getClaimableCredits('not-an-address')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(contractService.simulateCall).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getClaimableCreditDetails (itemized provenance)', () => {
+    const WALLET = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
+
+    it('decodes object-form ClaimableCreditDetail lines and sums the total', async () => {
+      const contractService = {
+        simulateCall: jest.fn().mockResolvedValue(
+          nativeToScVal([
+            {
+              period_index: 0,
+              report_id: BigInt(7),
+              start_time: BigInt(1_000_000),
+              end_time: BigInt(2_000_000),
+              credit_type: 'Carbon',
+              amount: BigInt(12_500_000),
+            },
+            {
+              period_index: 1,
+              report_id: BigInt(8),
+              start_time: BigInt(3_000_000),
+              end_time: BigInt(4_000_000),
+              credit_type: 'Biodiversity',
+              amount: BigInt(37_500),
+            },
+          ]),
+        ),
+      };
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          BondsService,
+          { provide: ContractService, useValue: contractService },
+          { provide: StellarService, useValue: {} },
+          { provide: NonceService, useValue: { next: jest.fn() } },
+          redisProvider,
+          signingProvider,
+          configProvider,
+          holderIndexProvider,
+        ],
+      }).compile();
+      const svc = moduleRef.get(BondsService);
+
+      const result = await svc.getClaimableCreditDetails(3, WALLET);
+
+      const [options] = contractService.simulateCall.mock.calls[0];
+      expect(options.method).toBe('claimable_credit_details');
+      expect(scValToNative(options.args[0])).toBe(BigInt(3));
+      expect(options.args[1]).toEqual(Address.fromString(WALLET).toScVal());
+
+      expect(result.bondId).toBe(3);
+      expect(result.address).toBe(WALLET);
+      expect(result.total).toBe(String(12_500_000 + 37_500));
+      expect(result.details).toHaveLength(2);
+      expect(result.details[0]).toEqual({
+        periodIndex: 0,
+        reportId: 7,
+        startTime: 1_000_000,
+        endTime: 2_000_000,
+        creditType: 'Carbon',
+        amount: '12500000',
+      });
+      expect(result.details[1].creditType).toBe('Biodiversity');
+    });
+
+    it('decodes positional tuple-array lines as a fallback', async () => {
+      const contractService = {
+        simulateCall: jest.fn().mockResolvedValue(
+          xdr.ScVal.scvVec([
+            xdr.ScVal.scvVec([
+              xdr.ScVal.scvU32(1),
+              nativeToScVal(BigInt(9), { type: 'u64' }),
+              nativeToScVal(BigInt(5), { type: 'u64' }),
+              nativeToScVal(BigInt(6), { type: 'u64' }),
+              nativeToScVal('BlueCarbon', { type: 'symbol' }),
+              nativeToScVal(BigInt(7), { type: 'i128' }),
+            ]),
+          ]),
+        ),
+      };
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          BondsService,
+          { provide: ContractService, useValue: contractService },
+          { provide: StellarService, useValue: {} },
+          { provide: NonceService, useValue: { next: jest.fn() } },
+          redisProvider,
+          signingProvider,
+          configProvider,
+          holderIndexProvider,
+        ],
+      }).compile();
+      const svc = moduleRef.get(BondsService);
+
+      const result = await svc.getClaimableCreditDetails(3, WALLET);
+
+      expect(result.total).toBe('7');
+      expect(result.details[0]).toEqual({
+        periodIndex: 1,
+        reportId: 9,
+        startTime: 5,
+        endTime: 6,
+        creditType: 'BlueCarbon',
+        amount: '7',
+      });
+    });
+
+    it('returns an empty itemization when the contract returns no lines', async () => {
+      const contractService = {
+        simulateCall: jest
+          .fn()
+          .mockResolvedValue(nativeToScVal([])),
+      };
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          BondsService,
+          { provide: ContractService, useValue: contractService },
+          { provide: StellarService, useValue: {} },
+          { provide: NonceService, useValue: { next: jest.fn() } },
+          redisProvider,
+          signingProvider,
+          configProvider,
+          holderIndexProvider,
+        ],
+      }).compile();
+      const svc = moduleRef.get(BondsService);
+
+      const result = await svc.getClaimableCreditDetails(3, WALLET);
+
+      expect(result.total).toBe('0');
+      expect(result.details).toEqual([]);
+    });
+
+    it('rejects a missing or invalid wallet address', async () => {
+      const contractService = { simulateCall: jest.fn() };
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          BondsService,
+          { provide: ContractService, useValue: contractService },
+          { provide: StellarService, useValue: {} },
+          { provide: NonceService, useValue: { next: jest.fn() } },
+          redisProvider,
+          signingProvider,
+          configProvider,
+          holderIndexProvider,
+        ],
+      }).compile();
+      const svc = moduleRef.get(BondsService);
+
+      await expect(svc.getClaimableCreditDetails(3)).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(
+        svc.getClaimableCreditDetails(3, 'not-an-address'),
+      ).rejects.toThrow(BadRequestException);
+      expect(contractService.simulateCall).not.toHaveBeenCalled();
     });
   });
 });

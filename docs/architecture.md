@@ -119,6 +119,34 @@ pub fn get_retired_balance(...)
 | DEXRouter       | BondEscrow(bond_id, addr)      | i128           | Escrowed bond token balance (locked at listing time)            |
 | ProjectRegistry | Project(project_id)            | ProjectInfo    | Project record                                                  |
 
+### Storage Key Schema Fixtures & Migration Compatibility (#159)
+
+Every `DataKey` variant across all seven contracts is snapshot in
+[`contracts/tests/fixtures/storage_keys.json`](../contracts/tests/fixtures/storage_keys.json)
+as hex-encoded XDR of the serialized key value, tagged with the canonical Rust
+constructor expression (e.g. `PeriodHolder(1, 1, addr, BlueCarbon)`).
+
+- **Canonical representation.** The hex is the on-the-wire `ScVal` XDR the
+  contract passes to `env.storage().instance().get/set` (the physical ledger
+  slot additionally hashes this value; the XDR is the human-auditable anchor).
+- **Drift guard.** `nbbs-tests::storage_schema::storage_fixture_file_matches_current_schema`
+  fails CI whenever the generated hex diverges from the committed file — so
+  adding/removing/reordering a `DataKey` variant, or changing a payload type,
+  breaks the build until the fixture is intentionally regenerated.
+- **Regeneration.** After an intentional schema change, regenerate with:
+
+  ```text
+  cargo test -p nbbs-tests --features storage-fixture-update regenerate_storage_fixture_file
+  ```
+
+  The generator lives in the `nbbs-storage` crate (`generate_storage_fixtures`),
+  which serializes the live `DataKey` enums so the snapshot never drifts from
+  `main`.
+
+This gives migration reviewers a precise before/after of the storage key space
+when a release changes contract state, and provides a machine-readable manifest
+for migration tooling.
+
 ## Cross-Contract Calls
 
 ```

@@ -47,6 +47,11 @@ export interface HolderListResponse {
   total: number;
 }
 
+export interface HolderResponse {
+  address: string;
+  balance: string;
+}
+
 export interface CouponDistributionResponse {
   bondId: number;
   periodIndex: number;
@@ -72,6 +77,27 @@ export interface TransferResponse {
 export interface UndistributedTotalResponse {
   bondId: number;
   undistributedTotal: string;
+}
+
+/**
+ * One itemized claimable-credit line (issue #156). Mirrors the coupon-engine
+ * `ClaimableCreditDetail` struct: a single period/report/credit-type accrual
+ * for a holder. `amount` is in credit minor units (6 decimals, #157).
+ */
+export interface ClaimableCreditDetail {
+  periodIndex: number;
+  reportId: number;
+  startTime: number;
+  endTime: number;
+  creditType: string;
+  amount: string;
+}
+
+export interface ClaimableCreditsResponse {
+  bondId: number;
+  address: string;
+  total: string;
+  details: ClaimableCreditDetail[];
 }
 
 export interface SweepUndistributedResponse {

@@ -1,4 +1,5 @@
-import { Injectable, signal, Subscription } from '@angular/core';
+import { Injectable, signal } from '@angular/core';
+import { Subscription } from 'rxjs';
 import { ApiService, BondDetailResponse } from '../../shared/services/api.service';
 
 export type BondDetailSection = 'bond' | 'holders' | 'coupon' | 'maturity';

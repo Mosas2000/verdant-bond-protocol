@@ -108,7 +108,7 @@ export class AdminIntentService {
     }
     const keypair = Keypair.fromSecret(secret);
     const message = `${payload.action}|${payload.target}|${payload.chain}|${payload.expiry}|${payload.nonce}`;
-    const bytes = keypair.sign(new TextEncoder().encode(message));
+    const bytes = keypair.sign(Buffer.from(message));
     return { ...payload, signature: toBase64(bytes) };
   }
 

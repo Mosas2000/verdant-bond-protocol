@@ -280,4 +280,49 @@ describe('OracleMonitoringService', () => {
       expect(summary).toEqual({ created: 0, updated: 1, escalated: 1 });
     });
   });
+
+  describe('computeCrossSourceAnomalies (#158)', () => {
+    it('flags a project-period whose two providers disagree beyond tolerance', async () => {
+      projectsService.findAll.mockResolvedValue({
+        data: [makeProject(1, 'VERRA-VCS')],
+        meta: { total: 1 },
+      });
+      oracleService.getProjectReports.mockResolvedValue([
+        { ...makeReport(NOW, 'GPROVIDER_A'), carbonSequestered: '1000' },
+        { ...makeReport(NOW, 'GPROVIDER_B'), carbonSequestered: '1000' },
+        { ...makeReport(NOW, 'GPROVIDER_C'), carbonSequestered: '1400' },
+      ]);
+
+      const report = await service.computeCrossSourceAnomalies(NOW);
+      expect(report.asOf).toBe(new Date(NOW).toISOString());
+      expect(report.anomalies).toHaveLength(1);
+      expect(report.anomalies[0].kind).toBe('outlier');
+      expect(['warning', 'critical']).toContain(report.anomalies[0].severity);
+    });
+
+    it('returns missing_source when no independent cross-check exists', async () => {
+      projectsService.findAll.mockResolvedValue({
+        data: [makeProject(1, 'VERRA-VCS')],
+        meta: { total: 1 },
+      });
+      oracleService.getProjectReports.mockResolvedValue([
+        { ...makeReport(NOW, 'GPROVIDER_A'), carbonSequestered: '1000' },
+      ]);
+
+      const report = await service.computeCrossSourceAnomalies(NOW);
+      expect(report.anomalies[0].kind).toBe('missing_source');
+      expect(report.anomalies[0].severity).toBe('info');
+    });
+
+    it('treats a project whose chain read fails as skipped, not fatal', async () => {
+      projectsService.findAll.mockResolvedValue({
+        data: [makeProject(1, 'VERRA-VCS')],
+        meta: { total: 1 },
+      });
+      oracleService.getProjectReports.mockRejectedValue(new Error('rpc down'));
+
+      const report = await service.computeCrossSourceAnomalies(NOW);
+      expect(report.anomalies).toEqual([]);
+    });
+  });
 });

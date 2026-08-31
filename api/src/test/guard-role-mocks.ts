@@ -63,6 +63,12 @@ export const fakeProviderGuard: CanActivate = {
   },
 };
 
+export const fakeIntentGuard: CanActivate = {
+  canActivate() {
+    return true;
+  },
+};
+
 /**
  * Produces a `jest.Mocked<T>` whose every prototype method is a `jest.fn()` so a
  * controller can be booted in isolation without a database. Only the methods a
