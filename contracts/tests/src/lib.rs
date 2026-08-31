@@ -88,6 +88,36 @@ mod integration {
         }
     }
 
+    /// Verifies a report with two independent signers to satisfy the default
+    /// 2-verifier threshold: the admin (consuming `admin_nonce`) plus a
+    /// freshly registered, staked provider (consuming `admin_nonce + 1` to
+    /// register). The admin's signature alone is not enough to finalize a
+    /// report — see "Multi-Source Verification Threshold" in
+    /// docs/oracle-design.md.
+    fn verify_with_quorum(
+        env: &Env,
+        oc_client: &OracleConsumerClient,
+        admin: &Address,
+        report_id: u64,
+        admin_nonce: u64,
+    ) {
+        oc_client.verify_report(admin, &report_id, &admin_nonce);
+
+        let second_verifier = Address::generate(env);
+        oc_client.register_provider(
+            admin,
+            &second_verifier,
+            &Symbol::new(env, "satellite"),
+            &(admin_nonce + 1),
+        );
+        oc_client.add_stake(
+            &second_verifier,
+            &nbbs_oracle_consumer::DEFAULT_MIN_VERIFIER_STAKE,
+            &0,
+        );
+        oc_client.verify_report(&second_verifier, &report_id, &1);
+    }
+
     mod full_lifecycle {
         use super::*;
 
@@ -146,7 +176,7 @@ mod integration {
             );
             assert_eq!(report_id, 1);
 
-            contracts.oc_client.verify_report(&admin, &report_id, &1);
+            verify_with_quorum(&env, &contracts.oc_client, &admin, report_id, 1);
 
             let report = contracts.oc_client.get_report(&report_id);
             assert_eq!(report.status, ReportStatus::Verified);
@@ -282,7 +312,7 @@ mod integration {
             );
             assert_eq!(rejected, Err(Ok(BondError::ReportNotVerified)));
 
-            contracts.oc_client.verify_report(&admin, &report_id, &1);
+            verify_with_quorum(&env, &contracts.oc_client, &admin, report_id, 1);
 
             let result = contracts.ce_client.distribute_coupon(
                 &admin,
@@ -357,7 +387,7 @@ mod integration {
             let report = contracts.oc_client.get_report(&report_id);
             assert_eq!(report.methodology, Symbol::new(&env, "blue_carbon"));
 
-            contracts.oc_client.verify_report(&admin, &report_id, &1);
+            verify_with_quorum(&env, &contracts.oc_client, &admin, report_id, 1);
             assert_eq!(
                 contracts.oc_client.get_report(&report_id).status,
                 ReportStatus::Verified
@@ -499,6 +529,9 @@ mod integration {
                 &2,
             );
 
+            contracts.oc_client.add_stake(&oracle_a, &100_000i128, &0);
+            contracts.oc_client.add_stake(&oracle_b, &100_000i128, &0);
+
             let report_id = contracts.oc_client.submit_report(
                 &oracle_a,
                 &project_id,
@@ -508,12 +541,12 @@ mod integration {
                 &BiodiversityMetrics::Absent,
                 &Symbol::new(&env, "verra_vcs"),
                 &make_ipfs_hash(&env, 1),
-                &0,
+                &1,
             );
 
             let self_result = contracts
                 .oc_client
-                .try_verify_report(&oracle_a, &report_id, &1);
+                .try_verify_report(&oracle_a, &report_id, &2);
             assert_eq!(self_result, Err(Ok(OracleError::InvalidSignature)));
 
             contracts.oc_client.verify_report(&admin, &report_id, &3);
@@ -522,7 +555,7 @@ mod integration {
             assert_eq!(pending.status, ReportStatus::Pending);
             assert_eq!(contracts.oc_client.get_verification_count(&report_id), 1);
 
-            contracts.oc_client.verify_report(&oracle_b, &report_id, &0);
+            contracts.oc_client.verify_report(&oracle_b, &report_id, &1);
 
             let verified = contracts.oc_client.get_report(&report_id);
             assert_eq!(verified.status, ReportStatus::Verified);
@@ -995,6 +1028,9 @@ mod integration {
 
             env.ledger().set_timestamp(config.maturity_date);
             contracts.bi_client.mature_bond(&admin, &bond_id, &1);
+            contracts
+                .bi_client
+                .fund_redemption(&admin, &bond_id, &2_000_000, &2);
 
             let state = contracts.bi_client.get_bond_state(&bond_id);
             assert_eq!(state.status, nbbs_shared::BondStatus::Matured);
@@ -1051,7 +1087,7 @@ mod integration {
                 &make_ipfs_hash(&env, 1),
                 &0,
             );
-            contracts.oc_client.verify_report(&admin, &report_id, &1);
+            verify_with_quorum(&env, &contracts.oc_client, &admin, report_id, 1);
 
             contracts.ce_client.register_bond(&admin, &bond_id, &project_id, &0);
 
@@ -1070,13 +1106,22 @@ mod integration {
                 &1,
             );
 
-            assert_eq!(result.total_credits, 99);
+            let total = 100 * nbbs_coupon_engine::CREDIT_MINOR_UNITS;
+            let credits_per_token =
+                total * nbbs_coupon_engine::FIXED_POINT / 3;
+            let per_holder = credits_per_token * 1 / nbbs_coupon_engine::FIXED_POINT;
+            let distributed = per_holder * 3;
+
+            assert_eq!(result.total_credits, distributed);
             assert_eq!(result.holder_count, 3);
 
-            assert_eq!(contracts.ce_client.get_undistributed_total(&bond_id), 1);
+            assert_eq!(
+                contracts.ce_client.get_undistributed_total(&bond_id),
+                total - distributed
+            );
 
             let swept = contracts.ce_client.sweep_undistributed(&admin, &bond_id, &2);
-            assert_eq!(swept, 1);
+            assert_eq!(swept, total - distributed);
             assert_eq!(contracts.ce_client.get_undistributed_total(&bond_id), 0);
         }
 
@@ -1193,6 +1238,175 @@ mod integration {
                 &0,
             );
             assert_eq!(result, Err(Ok(OracleError::ProviderNotFound)));
+        }
+    }
+
+    mod claimable_provenance {
+        use super::*;
+
+        // Itemized claimable-credit provenance (#156): a Basket bond accrues
+        // Carbon and Biodiversity credits per period and the itemized view joins
+        // each line with its report id and period window. Claiming clears all
+        // lines.
+        #[test]
+        fn test_itemized_claimable_details_across_periods() {
+            let env = Env::default();
+            env.mock_all_auths_allowing_non_root_auth();
+
+            let admin = Address::generate(&env);
+            let holder = Address::generate(&env);
+            let oracle = Address::generate(&env);
+            let contracts = deploy_contracts(&env, &admin);
+
+            let project_id = make_project_id(&env, 1);
+            let pid = contracts.pr_client.register_project(
+                &holder,
+                &make_ipfs_hash(&env, 1),
+                &Symbol::new(&env, "VCS"),
+                &Symbol::new(&env, "US"),
+                &0,
+            );
+            contracts.pr_client.approve_project(&admin, &pid, &0);
+
+            let mut config = make_bond_config(&env, project_id.clone(), 10_000);
+            config.credit_type = CreditType::Basket;
+            let bond_id = contracts.bi_client.issue_bond(&admin, &config, &0);
+            contracts
+                .bi_client
+                .subscribe(&holder, &bond_id, &10_000, &0);
+
+            contracts.oc_client.register_provider(
+                &admin,
+                &oracle,
+                &Symbol::new(&env, "verra_vcs"),
+                &0,
+            );
+
+            let report_0 = contracts.oc_client.submit_report(
+                &oracle,
+                &project_id,
+                &1000u64,
+                &2000u64,
+                &100_000i128,
+                &BiodiversityMetrics::Present((500, 125, 1_000)),
+                &Symbol::new(&env, "verra_vcs"),
+                &make_ipfs_hash(&env, 1),
+                &0,
+            );
+            verify_with_quorum(&env, &contracts.oc_client, &admin, report_0, 1);
+
+            let carbon_0 = 100 * nbbs_coupon_engine::CREDIT_MINOR_UNITS;
+            let bio_0 = (500 * nbbs_coupon_engine::HABITAT_CREDIT_RATE
+                + 125 * nbbs_coupon_engine::SPECIES_CREDIT_RATE
+                + 1_000 * nbbs_coupon_engine::UNIT_CREDIT_RATE)
+                * nbbs_coupon_engine::CREDIT_MINOR_UNITS
+                / nbbs_coupon_engine::HABITAT_CREDIT_RATE;
+
+            contracts.ce_client.register_bond(&admin, &bond_id, &project_id, &0);
+            let holders = soroban_sdk::vec![&env, holder.clone()];
+            contracts.ce_client.distribute_coupon(
+                &admin,
+                &bond_id,
+                &0,
+                &holders,
+                &report_0,
+                &1,
+            );
+
+            let report_1 = contracts.oc_client.submit_report(
+                &oracle,
+                &project_id,
+                &2001u64,
+                &3000u64,
+                &50_000i128,
+                &BiodiversityMetrics::Present((200, 50, 300)),
+                &Symbol::new(&env, "verra_vcs"),
+                &make_ipfs_hash(&env, 1),
+                &1,
+            );
+            verify_with_quorum(&env, &contracts.oc_client, &admin, report_1, 3);
+
+            let carbon_1 = 50 * nbbs_coupon_engine::CREDIT_MINOR_UNITS;
+            let bio_1 = (200 * nbbs_coupon_engine::HABITAT_CREDIT_RATE
+                + 50 * nbbs_coupon_engine::SPECIES_CREDIT_RATE
+                + 300 * nbbs_coupon_engine::UNIT_CREDIT_RATE)
+                * nbbs_coupon_engine::CREDIT_MINOR_UNITS
+                / nbbs_coupon_engine::HABITAT_CREDIT_RATE;
+
+            let holder_vec = soroban_sdk::vec![&env, holder.clone()];
+            contracts.ce_client.distribute_coupon(
+                &admin,
+                &bond_id,
+                &1,
+                &holder_vec,
+                &report_1,
+                &2,
+            );
+
+            let expected_total = carbon_0 + bio_0 + carbon_1 + bio_1;
+            assert_eq!(
+                contracts.ce_client.claimable_credits(&bond_id, &holder),
+                expected_total
+            );
+
+            let details = contracts.ce_client.claimable_credit_details(&bond_id, &holder);
+            assert_eq!(details.len(), 4);
+
+            let line = details.get(0).unwrap();
+            assert_eq!(line.period_index, 0);
+            assert_eq!(line.report_id, report_0);
+            assert_eq!(line.start_time, 1000);
+            assert_eq!(line.end_time, 2000);
+            assert_eq!(line.credit_type, CreditType::Carbon);
+            assert_eq!(line.amount, carbon_0);
+
+            let line = details.get(1).unwrap();
+            assert_eq!(line.period_index, 0);
+            assert_eq!(line.report_id, report_0);
+            assert_eq!(line.credit_type, CreditType::Biodiversity);
+            assert_eq!(line.amount, bio_0);
+
+            let line = details.get(2).unwrap();
+            assert_eq!(line.period_index, 1);
+            assert_eq!(line.report_id, report_1);
+            assert_eq!(line.start_time, 2001);
+            assert_eq!(line.end_time, 3000);
+            assert_eq!(line.credit_type, CreditType::Carbon);
+            assert_eq!(line.amount, carbon_1);
+
+            let line = details.get(3).unwrap();
+            assert_eq!(line.period_index, 1);
+            assert_eq!(line.report_id, report_1);
+            assert_eq!(line.credit_type, CreditType::Biodiversity);
+            assert_eq!(line.amount, bio_1);
+
+            let claimed = contracts.ce_client.claim_credits(&holder, &bond_id, &0);
+            assert_eq!(claimed, expected_total);
+            assert_eq!(contracts.ce_client.claimable_credits(&bond_id, &holder), 0);
+            assert_eq!(
+                contracts.ce_client.claimable_credit_details(&bond_id, &holder).len(),
+                0
+            );
+        }
+
+        #[test]
+        fn test_claimable_details_empty_before_distribution() {
+            let env = Env::default();
+            env.mock_all_auths_allowing_non_root_auth();
+
+            let admin = Address::generate(&env);
+            let holder = Address::generate(&env);
+            let contracts = deploy_contracts(&env, &admin);
+
+            let project_id = make_project_id(&env, 1);
+            let config = make_bond_config(&env, project_id, 10_000);
+            let bond_id = contracts.bi_client.issue_bond(&admin, &config, &0);
+
+            assert_eq!(contracts.ce_client.claimable_credits(&bond_id, &holder), 0);
+            assert_eq!(
+                contracts.ce_client.claimable_credit_details(&bond_id, &holder).len(),
+                0
+            );
         }
     }
 
@@ -1360,7 +1574,7 @@ mod integration {
                     &make_ipfs_hash(&env, 1),
                     &0,
                 );
-                contracts.oc_client.verify_report(&admin, &report_id, &1);
+                verify_with_quorum(&env, &contracts.oc_client, &admin, report_id, 1);
 
                 contracts.ce_client.register_bond(&admin, &bond_id, &project_id, &0);
 
@@ -1369,7 +1583,8 @@ mod integration {
                     holder_vec.push_back(h.clone());
                 }
 
-                let total_credits = carbon / 1000;
+                let total_credits =
+                    carbon / nbbs_coupon_engine::CREDIT_DIVISOR * nbbs_coupon_engine::CREDIT_MINOR_UNITS;
                 contracts.ce_client.distribute_coupon(
                     &admin,
                     &bond_id,
@@ -1600,6 +1815,54 @@ mod integration {
                 bob_retired + charlie_retired + charlie_remaining + swept + contracts.ce_client.get_undistributed_total(&bond_id),
                 total_credits
             );
+        }
+    }
+
+    mod storage_schema {
+        use super::*;
+        use nbbs_storage::{generate_storage_fixtures, StorageKeyFixture};
+        use std::collections::BTreeMap;
+
+        fn fixture_path() -> std::path::PathBuf {
+            let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            p.push("fixtures");
+            p.push("storage_keys.json");
+            p
+        }
+
+        fn current() -> BTreeMap<String, BTreeMap<String, StorageKeyFixture>> {
+            generate_storage_fixtures(&Env::default())
+        }
+
+        #[test]
+        fn storage_fixture_file_matches_current_schema() {
+            let path = fixture_path();
+            assert!(
+                path.exists(),
+                "missing storage_keys.json fixture; regenerate with: cargo test -p nbbs-storage --features storage-fixture-update regenerate_storage_fixture_file"
+            );
+            let raw =
+                std::fs::read_to_string(&path).expect("failed to read storage_keys.json fixture");
+            let on_disk: BTreeMap<String, BTreeMap<String, StorageKeyFixture>> =
+                serde_json::from_str(&raw)
+                    .expect("storage_keys.json is not valid JSON (regenerate fixtures)");
+            assert_eq!(
+                on_disk, current(),
+                "storage_keys.json is stale or drifted from the DataKey enums — regenerate fixtures"
+            );
+        }
+
+        #[cfg(feature = "storage-fixture-update")]
+        #[test]
+        fn regenerate_storage_fixture_file() {
+            let fixtures = current();
+            let pretty =
+                serde_json::to_string_pretty(&fixtures).expect("serialize storage fixtures");
+            std::fs::create_dir_all(fixture_path().parent().unwrap()).expect("mkdir fixtures");
+            let mut content = pretty;
+            content.push('\n');
+            std::fs::write(&fixture_path(), content).expect("write storage_keys.json");
+            eprintln!("wrote {}", fixture_path().display());
         }
     }
 }

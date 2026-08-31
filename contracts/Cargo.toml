@@ -9,6 +9,7 @@ members = [
     "credit-retirement",
     "governance",
     "tests",
+    "storage",
 ]
 resolver = "2"
 

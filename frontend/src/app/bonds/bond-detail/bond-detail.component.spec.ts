@@ -57,12 +57,21 @@ describe('BondDetailComponent (issue #4 refresh model)', () => {
   beforeEach(async () => {
     apiService = jasmine.createSpyObj('ApiService', [
       'getBondDetail', 'subscribeToBond', 'claimCredits', 'transferBond',
-      'sweepUndistributed', 'getCouponEligibility',
+      'sweepUndistributed', 'getCouponEligibility', 'getClaimableCredits',
     ]);
     apiService.getBondDetail.and.returnValue(of(detailFor()));
-    apiService.subscribeToBond.and.returnValue(of({ transactionHash: '0xsub' }));
-    apiService.claimCredits.and.returnValue(of({ credits: 5, transactionHash: '0xclaim' }));
-    apiService.transferBond.and.returnValue(of({ transactionHash: '0xtransfer' }));
+    apiService.getClaimableCredits.and.returnValue(of({
+      bondId: 1,
+      address: 'GAAAA',
+      total: '1500000',
+      details: [
+        { periodIndex: 0, reportId: 1, startTime: 1000, endTime: 2000, creditType: 'Carbon', amount: '1000000' },
+        { periodIndex: 1, reportId: 2, startTime: 2000, endTime: 3000, creditType: 'BlueCarbon', amount: '500000' },
+      ],
+    }));
+    apiService.subscribeToBond.and.returnValue(of({ bondId: 1, subscriber: 'GAAAA', amount: '1', transactionHash: '0xsub' }));
+    apiService.claimCredits.and.returnValue(of({ bondId: 1, investorAddress: 'GAAAA', credits: '5', transactionHash: '0xclaim' }));
+    apiService.transferBond.and.returnValue(of({ bondId: 1, fromAddress: 'GAAAA', toAddress: 'GBBBB', amount: '1', transactionHash: '0xtransfer' }));
     apiService.sweepUndistributed.and.returnValue(of({ bondId: 1, swept: '7', transactionHash: '0xabc' }));
     apiService.getCouponEligibility.and.returnValue(of({ projectId: 'a1b2', eligible: true, reasons: [], blockedByReportIds: [] }));
 
@@ -137,6 +146,18 @@ describe('BondDetailComponent (issue #4 refresh model)', () => {
     const items = fixture.nativeElement.querySelectorAll('.holder-item');
     expect(items.length).toBe(2);
     expect(fixture.nativeElement.textContent).toContain('GAAAA');
+    discardPeriodicTasks();
+  }));
+
+  it('renders itemized claimable-credit provenance with minor-unit formatting (#156/#157)', fakeAsync(() => {
+    createFixture();
+
+    expect(apiService.getClaimableCredits).toHaveBeenCalled();
+    const text = fixture.nativeElement.textContent;
+    expect(text).toContain('Claimable: 1.5 credits');
+    expect(text).toContain('Period 1');
+    expect(text).toContain('Period 2');
+    expect(text).toContain('BlueCarbon');
     discardPeriodicTasks();
   }));
 

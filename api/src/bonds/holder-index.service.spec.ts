@@ -9,8 +9,8 @@ import { nativeToScVal, scValToNative } from '@stellar/stellar-sdk';
 process.env.NODE_ENV = 'test';
 process.env.HOLDER_INDEX_STORE = 'memory';
 
-const A = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
-const B = 'GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
+const A = 'GBLG33K2H6RZKCKNRPA5VEITPHOAEDYL7HN6WS3OYFOL5UAXO5QWHLMI';
+const B = 'GBL5ZNRGB26PBXWIFAKVYZCEI7FRW3RRYZB3MAMJOX77WBCJTLJIVKOB';
 
 function makeService(redis: any, contract: any) {
   const config = { getBondIssuerAddress: jest.fn().mockReturnValue('BOND') };
@@ -55,7 +55,7 @@ describe('HolderIndexService', () => {
   });
 
   it('returns holder balances and prunes zero-balance holders', async () => {
-    const service = makeService({ sAdd: jest.fn() }, contract);
+    const service = makeService({ sAdd: jest.fn().mockResolvedValue(undefined) }, contract);
     balanceMap.set(A, 100n);
     balanceMap.set(B, 0n);
 
@@ -68,7 +68,7 @@ describe('HolderIndexService', () => {
   });
 
   it('discovers out-of-band transfers via reconciliation', async () => {
-    const service = makeService({ sAdd: jest.fn() }, contract);
+    const service = makeService({ sAdd: jest.fn().mockResolvedValue(undefined) }, contract);
     // A was known through the API, but a direct contract transfer moved A's
     // balance to B (which the API never recorded).
     balanceMap.set(A, 0n);
@@ -83,14 +83,14 @@ describe('HolderIndexService', () => {
   });
 
   it('refuses coupon distribution on an unseeded, empty index (strict)', async () => {
-    const service = makeService({ sAdd: jest.fn() }, contract);
+    const service = makeService({ sAdd: jest.fn().mockResolvedValue(undefined) }, contract);
     await expect(service.getHoldersForCoupon(1, { requireFresh: true })).rejects.toBeInstanceOf(
       ConflictException,
     );
   });
 
   it('returns reconciled holders for coupon distribution after seeding', async () => {
-    const service = makeService({ sAdd: jest.fn() }, contract);
+    const service = makeService({ sAdd: jest.fn().mockResolvedValue(undefined) }, contract);
     balanceMap.set(A, 50n);
 
     await service.recordSubscribe(1, A);

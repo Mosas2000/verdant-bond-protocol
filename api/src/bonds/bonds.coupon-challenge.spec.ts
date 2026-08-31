@@ -8,18 +8,31 @@ import { NonceService } from '../common/services/nonce.service';
 import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { ConfigService } from '../config/config.service';
+import { HolderIndexService } from './holder-index.service';
 import { ReportStatus } from '../oracle/interfaces/oracle.interface';
+import { nativeToScVal, xdr } from '@stellar/stellar-sdk';
+
+const validCouponResult = xdr.ScVal.scvVec([
+  nativeToScVal(BigInt(1), { type: 'u64' }),
+  xdr.ScVal.scvU32(0),
+  nativeToScVal(BigInt(0), { type: 'i128' }),
+  xdr.ScVal.scvU32(1),
+]);
 
 function bondsModuleWith(oracleService?: any) {
   const providers: any[] = [
     BondsService,
     {
+      provide: HolderIndexService,
+      useValue: { getHoldersForCoupon: jest.fn().mockResolvedValue([]) },
+    },
+    {
       provide: ContractService,
-      useValue: { invokeContractMethod: jest.fn().mockResolvedValue({ result: [], transactionHash: 'x' }), simulateCall: jest.fn() },
+      useValue: { invokeContractMethod: jest.fn().mockResolvedValue({ result: validCouponResult, transactionHash: 'x' }), simulateCall: jest.fn() },
     },
     {
       provide: StellarService,
-      useValue: { getKeypairFromSecret: jest.fn().mockReturnValue({ publicKey: () => 'G_ADMIN' }) },
+      useValue: { getKeypairFromSecret: jest.fn().mockReturnValue({ publicKey: () => 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF' }) },
     },
     { provide: NonceService, useValue: { next: jest.fn().mockResolvedValue(0) } },
     {

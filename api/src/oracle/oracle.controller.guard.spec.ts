@@ -99,5 +99,17 @@ describe('OracleController authorization (behavioral)', () => {
         .expect(200);
       expect(monitoringService.computeStaleness).toHaveBeenCalled();
     });
+
+    it('GET /oracle/monitoring/anomalies is public (#158)', async () => {
+      mockMonitoringService.computeCrossSourceAnomalies.mockResolvedValue({
+        asOf: new Date().toISOString(),
+        anomalies: [],
+      } as any);
+      await request(app.getHttpServer())
+        .get('/oracle/monitoring/anomalies')
+        .set('x-test-role', 'anon' as TestRole)
+        .expect(200);
+      expect(monitoringService.computeCrossSourceAnomalies).toHaveBeenCalled();
+    });
   });
 });

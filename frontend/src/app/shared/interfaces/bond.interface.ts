@@ -33,6 +33,26 @@ export interface HolderResponse {
   balance: string;
 }
 
+/**
+ * A single period/report/credit-type accrual of claimable credits for a holder
+ * (#156). `amount` is in credit minor units (6 decimals, #157).
+ */
+export interface ClaimableCreditDetail {
+  periodIndex: number;
+  reportId: number;
+  startTime: number;
+  endTime: number;
+  creditType: 'Carbon' | 'Biodiversity' | 'Basket' | 'BlueCarbon';
+  amount: string;
+}
+
+export interface ClaimableCreditsResponse {
+  bondId: number;
+  address: string;
+  total: string;
+  details: ClaimableCreditDetail[];
+}
+
 export interface Project {
   id: number;
   name: string;

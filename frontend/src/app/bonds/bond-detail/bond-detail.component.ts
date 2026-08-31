@@ -12,7 +12,8 @@ import { ConnectPromptComponent } from '../../shared/components/connect-prompt/c
 import { AdminSecretPromptComponent } from '../../shared/components/admin-secret-prompt/admin-secret-prompt.component';
 import { AdminAccessService } from '../../shared/services/admin-access.service';
 import { AdminIntentService } from '../../shared/services/admin-intent.service';
-import { Bond } from '../../shared/interfaces/bond.interface';
+import { Bond, ClaimableCreditsResponse } from '../../shared/interfaces/bond.interface';
+import { formatCreditMinorUnits } from '../../shared/utils/credit-format';
 
 @Component({
   selector: 'app-bond-detail',
@@ -175,6 +176,28 @@ import { Bond } from '../../shared/interfaces/bond.interface';
 
             <div class="claim-section">
               <h3 class="section-title">Claim Credits</h3>
+              @if (claimableLoading()) {
+                <div class="muted">Loading claimable credits…</div>
+              } @else if (claimable()) {
+                <div class="claimable-total">
+                  Claimable: {{ fmtCredits(claimable()!.total) }} credits
+                </div>
+                @if (claimable()!.details.length > 0) {
+                  <div class="claimable-detail-title">Provenance</div>
+                  <ul class="claimable-list">
+                    @for (d of claimable()!.details; track d.periodIndex + '-' + d.reportId) {
+                      <li class="claimable-item">
+                        <span class="claimable-period">Period {{ d.periodIndex + 1 }}</span>
+                        <span class="claimable-amount">{{ fmtCredits(d.amount) }}</span>
+                        <span class="claimable-meta">
+                          {{ d.creditType }} · {{ d.startTime * 1000 | date:'mediumDate' }}
+                          – {{ d.endTime * 1000 | date:'mediumDate' }}
+                        </span>
+                      </li>
+                    }
+                  </ul>
+                }
+              }
               <button
                 class="btn btn-primary claim-btn"
                 [disabled]="claimSubmitting() || !authService.sessionReady()"
@@ -350,6 +373,13 @@ import { Bond } from '../../shared/interfaces/bond.interface';
     .marketplace-link { margin-top: 20px; }
     .claim-section { margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
     .claim-btn, .transfer-btn, .sweep-btn { width: 100%; }
+    .claimable-total { font-size: 0.875rem; font-weight: 600; color: #1a1a2e; margin-bottom: 8px; }
+    .claimable-detail-title { font-size: 0.75rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; margin: 8px 0 4px; }
+    .claimable-list { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 6px; }
+    .claimable-item { display: flex; flex-direction: column; gap: 2px; font-size: 0.8125rem; padding: 6px 10px; background: #f9fafb; border-radius: 6px; }
+    .claimable-period { font-weight: 600; color: #1a1a2e; }
+    .claimable-amount { font-family: monospace; color: #16a34a; }
+    .claimable-meta { color: #6b7280; font-size: 0.75rem; }
     .transfer-section { margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
     .admin-section { margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
     .admin-note { font-size: 0.8125rem; color: #6b7280; padding: 8px 0; }
@@ -389,6 +419,8 @@ export class BondDetailComponent implements OnInit, OnDestroy {
   readonly sectionLoading = this.coordinator.sectionLoading;
   readonly error = signal('');
   readonly couponEligibility = signal<CouponEligibility | null>(null);
+  readonly claimable = signal<ClaimableCreditsResponse | null>(null);
+  readonly claimableLoading = signal(false);
   readonly now = signal(Date.now());
   readonly subscribeSubmitting = signal(false);
   readonly subscribeSuccess = signal(false);
@@ -448,10 +480,39 @@ export class BondDetailComponent implements OnInit, OnDestroy {
     });
   }, { allowSignalWrites: true });
 
+  /**
+   * Load itemized claimable-credit provenance whenever the committed bond
+   * snapshot or the connected wallet changes (#156). Amounts are rendered in
+   * minor units via `formatCreditMinorUnits` (#157).
+   */
+  private readonly claimableEffect = effect(() => {
+    const bond = this.coordinator.detail()?.bond;
+    const address = this.walletService.address();
+    if (!bond) {
+      this.claimable.set(null);
+      return;
+    }
+    this.claimableLoading.set(true);
+    this.apiService.getClaimableCredits(bond.id, address ?? undefined).subscribe({
+      next: (res) => {
+        this.claimable.set(res);
+        this.claimableLoading.set(false);
+      },
+      error: () => {
+        this.claimable.set(null);
+        this.claimableLoading.set(false);
+      },
+    });
+  }, { allowSignalWrites: true });
+
   subscribeAmount = 0;
   transferTo = '';
   transferAmount = 0;
 
+  /** Format a minor-unit credit quantity for display (#157). */
+  fmtCredits(minorUnits: string | number | bigint, maxDecimals?: number): string {
+    return formatCreditMinorUnits(minorUnits, maxDecimals);
+  }
   subscribeProgress(): number {
     const b = this.bond();
     if (!b || Number(b.totalSupply) === 0) return 0;

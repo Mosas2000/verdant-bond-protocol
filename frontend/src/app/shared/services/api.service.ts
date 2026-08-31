@@ -11,6 +11,7 @@ import {
   UndistributedTotalResponse, SweepUndistributedResponse,
   QuoteBalanceResponse, QuoteTransactionResponse,
   QuoteAsset, DepositQuoteDto, WithdrawQuoteDto, HolderResponse,
+  ClaimableCreditDetail, ClaimableCreditsResponse,
 } from '../interfaces/bond.interface';
 
 export interface ProblemDetails {
@@ -197,6 +198,25 @@ export class ApiService {
       `/api/bonds/${id}/undistributed`,
       { headers: this.headers() },
     ));
+  }
+
+  /**
+   * Itemized claimable-credit provenance for a holder (#156). `address` is
+   * optional: when omitted the API resolves the caller's wallet address, so the
+   * connected wallet gets its own itemized breakdown. Amounts are raw minor-unit
+   * strings (#157) and should be rendered with `formatCreditMinorUnits`.
+   */
+  getClaimableCredits(
+    id: number,
+    address?: string,
+  ): Observable<ClaimableCreditsResponse> {
+    const params = address ? new HttpParams().set('address', address) : undefined;
+    return this.withProblemDetails(
+      this.http.get<ClaimableCreditsResponse>(`/api/bonds/${id}/claimable-credits`, {
+        params,
+        headers: this.headers(),
+      }),
+    );
   }
 
   sweepUndistributed(id: number): Observable<SweepUndistributedResponse> {

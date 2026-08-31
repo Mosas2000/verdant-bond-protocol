@@ -9,6 +9,28 @@ pub enum CreditType {
     BlueCarbon,
 }
 
+impl CreditType {
+    /// Number of decimal places used to represent credit quantities in minor
+    /// units on-chain. Every type currently shares a 6-decimal precision so
+    /// proportional coupon shares can be expressed exactly.
+    pub const fn decimals(self) -> u32 {
+        match self {
+            CreditType::Carbon
+            | CreditType::Biodiversity
+            | CreditType::Basket
+            | CreditType::BlueCarbon => 6,
+        }
+    }
+
+    /// Minor units per whole credit for this type (`10^decimals`).
+    pub const fn minor_units(self) -> i128 {
+        match self.decimals() {
+            6 => 1_000_000,
+            d => 10i128.pow(d),
+        }
+    }
+}
+
 /// Canonical oracle methodology symbols for the registered providers.
 pub mod methodology {
     /// Blue carbon (mangrove, seagrass, saltmarsh) monitoring.

@@ -10,7 +10,7 @@ import { PendingTransactionsService } from '../../shared/services/pending-transa
 describe('MarketplaceSellComponent', () => {
   let component: MarketplaceSellComponent;
   let fixture: ComponentFixture<MarketplaceSellComponent>;
-  let apiService: { getHeldBonds: jasmine.Spy; listBondTokens: jasmine.Spy };
+  let apiService: { getHeldBonds: jasmine.Spy; listBondTokens: jasmine.Spy; getQuoteBalance: jasmine.Spy; getWalletBalance: jasmine.Spy };
 
   beforeEach(async () => {
     apiService = {
