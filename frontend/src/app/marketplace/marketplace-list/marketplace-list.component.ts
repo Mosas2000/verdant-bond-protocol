@@ -54,6 +54,17 @@ export const ORDERS_POLL_INTERVAL_MS = 15000;
             }
           </select>
         </label>
+        <label class="filter-label">
+          Status Filter
+          <select class="filter-select" [ngModel]="filterStatus()" (ngModelChange)="onStatusFilterChange($event)">
+            <option value="All">All Statuses</option>
+            <option value="Open">Open</option>
+            <option value="PartiallyFilled">Partially Filled</option>
+            <option value="Filled">Filled</option>
+            <option value="Cancelled">Cancelled</option>
+            <option value="Expired">Expired</option>
+          </select>
+        </label>
       </div>
 
       @if (loading()) {
@@ -268,6 +279,7 @@ export class MarketplaceListComponent implements OnInit, OnDestroy {
   readonly loading = signal(true);
   readonly error = signal('');
   readonly filterBondId = signal<number | null>(null);
+  readonly filterStatus = signal<Order['status'] | 'All'>('All');
 
   readonly buyOrderId = signal<number | null>(null);
   readonly buySubmitting = signal(false);
@@ -316,8 +328,16 @@ export class MarketplaceListComponent implements OnInit, OnDestroy {
   readonly priceKeys = computed(() => Object.keys(this.bestPrices()).map(Number));
 
   readonly filteredOrders = computed(() => {
-    const selected = this.filterBondId();
-    return selected ? this.orders().filter(o => o.bondId === selected) : this.orders();
+    const selectedBond = this.filterBondId();
+    const selectedStatus = this.filterStatus();
+    let result = this.orders();
+    if (selectedBond) {
+      result = result.filter(o => o.bondId === selectedBond);
+    }
+    if (selectedStatus !== 'All') {
+      result = result.filter(o => o.status === selectedStatus);
+    }
+    return result;
   });
 
   readonly myOrders = computed(() => {
@@ -330,6 +350,10 @@ export class MarketplaceListComponent implements OnInit, OnDestroy {
     const bondIdParam = this.route.snapshot.queryParamMap.get('bondId');
     if (bondIdParam) {
       this.filterBondId.set(Number(bondIdParam));
+    }
+    const statusParam = this.route.snapshot.queryParamMap.get('status') as Order['status'] | null;
+    if (statusParam) {
+      this.filterStatus.set(statusParam);
     }
     this.ordersRefresh$
       .pipe(
@@ -377,7 +401,7 @@ export class MarketplaceListComponent implements OnInit, OnDestroy {
     this.error.set('');
     // defer re-invokes the API call on every (re)subscription, so retries issue a
     // fresh request with a fresh cache-busting param instead of reusing a stale one.
-    return defer(() => this.apiService.getOrders({ bondId: this.filterBondId() ?? undefined }, forceRefresh)).pipe(
+    return defer(() => this.apiService.getOrders({ bondId: this.filterBondId() ?? undefined, status: this.filterStatus() === 'All' ? undefined : this.filterStatus() }, forceRefresh)).pipe(
       retry({
         count: ORDERS_RETRY_COUNT,
         delay: (error, attempt) =>
@@ -407,7 +431,17 @@ export class MarketplaceListComponent implements OnInit, OnDestroy {
     this.filterBondId.set(bondId);
     this.router.navigate([], {
       relativeTo: this.route,
-      queryParams: bondId ? { bondId } : {},
+      queryParams: bondId ? { bondId } : { bondId: null },
+      queryParamsHandling: 'merge',
+    });
+    this.loadOrders();
+  }
+
+  onStatusFilterChange(status: Order['status'] | 'All'): void {
+    this.filterStatus.set(status);
+    this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: status !== 'All' ? { status } : { status: null },
       queryParamsHandling: 'merge',
     });
     this.loadOrders();

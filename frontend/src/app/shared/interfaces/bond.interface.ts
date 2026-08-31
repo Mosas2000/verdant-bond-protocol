@@ -69,6 +69,7 @@ export interface Order {
   quoteAsset: QuoteAsset;
   status: 'Open' | 'PartiallyFilled' | 'Filled' | 'Cancelled' | 'Expired';
   createdAt: string;
+  expiresAt: string;
 }
 
 export interface OrderQueryParams {
