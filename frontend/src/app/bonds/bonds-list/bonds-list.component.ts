@@ -4,18 +4,24 @@ import { RouterModule, Router } from '@angular/router';
 import { ApiService } from '../../shared/services/api.service';
 import { BondCardComponent } from '../../shared/components/bond-card/bond-card.component';
 import { LoadingSpinnerComponent } from '../../shared/components/loading-spinner/loading-spinner.component';
+import { ConnectPromptComponent } from '../../shared/components/connect-prompt/connect-prompt.component';
+import { AdminAccessService } from '../../shared/services/admin-access.service';
 import { Bond } from '../../shared/interfaces/bond.interface';
 
 @Component({
   selector: 'app-bonds-list',
   standalone: true,
-  imports: [CommonModule, RouterModule, BondCardComponent, LoadingSpinnerComponent],
+  imports: [CommonModule, RouterModule, BondCardComponent, LoadingSpinnerComponent, ConnectPromptComponent],
   template: `
     <div class="bonds-page">
       <div class="page-header">
         <h1 class="page-title">Bonds</h1>
-        <a class="btn btn-primary" routerLink="/bonds/issue">Issue Bond</a>
+        @if (adminAccess.isAdmin()) {
+          <a class="btn btn-primary" routerLink="/bonds/issue">Issue Bond</a>
+        }
       </div>
+
+      <app-connect-prompt action="Browsing is open to everyone; subscribing to a bond needs a signed-in wallet." />
 
       @if (error()) {
         <div class="error-banner">{{ error() }}</div>
@@ -88,6 +94,8 @@ import { Bond } from '../../shared/interfaces/bond.interface';
 export class BondsListComponent implements OnInit {
   private readonly apiService = inject(ApiService);
   private readonly router = inject(Router);
+  /** Issuance is admin-only on the API, so only show the link to an admin (#168). */
+  readonly adminAccess = inject(AdminAccessService);
 
   readonly bonds = signal<Bond[]>([]);
   readonly loading = signal(true);

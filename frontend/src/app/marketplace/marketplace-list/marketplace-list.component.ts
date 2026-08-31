@@ -10,6 +10,7 @@ import { WalletService } from '../../auth/wallet.service';
 import { StatusBadgeComponent } from '../../shared/components/status-badge/status-badge.component';
 import { LoadingSpinnerComponent } from '../../shared/components/loading-spinner/loading-spinner.component';
 import { QuoteBalanceComponent, QuoteBalances } from '../../shared/components/quote-balance/quote-balance.component';
+import { ConnectPromptComponent } from '../../shared/components/connect-prompt/connect-prompt.component';
 import { Order, Bond, QuoteAsset, PaginatedResponse } from '../../shared/interfaces/bond.interface';
 import { appErrorMessage, normalizeApiError } from '../../shared/errors/api-error';
 
@@ -24,7 +25,7 @@ export const ORDERS_POLL_INTERVAL_MS = 15000;
 @Component({
   selector: 'app-marketplace-list',
   standalone: true,
-  imports: [CommonModule, RouterModule, FormsModule, StatusBadgeComponent, LoadingSpinnerComponent, QuoteBalanceComponent],
+  imports: [CommonModule, RouterModule, FormsModule, StatusBadgeComponent, LoadingSpinnerComponent, QuoteBalanceComponent, ConnectPromptComponent],
   template: `
     <div class="marketplace-page">
       <div class="page-header">
@@ -33,6 +34,8 @@ export const ORDERS_POLL_INTERVAL_MS = 15000;
           List Tokens for Sale
         </a>
       </div>
+
+      <app-connect-prompt action="Listings are public; buying, selling, and cancelling need a signed-in wallet." />
 
       @if (error()) {
         <div class="error-banner">{{ error() }}</div>
