@@ -27,6 +27,9 @@ import {
   BondStatusEnum,
   BondMaturityStatusEnum,
   CreditTypeEnum,
+  ClaimableCreditDetail,
+  ClaimableCreditsResponse,
+  BondDetailResponse,
 } from './interfaces/bond.interface';
 import { toBigIntString } from '../common/utils';
 import { ConfigService } from '../config/config.service';
@@ -66,7 +69,7 @@ export class BondsService {
 
     const configScVal = this.encodeBondConfig(dto);
 
-    const { result } = await this.contractService.invokeContractMethod(
+    const { result, transactionHash } = await this.contractService.invokeContractMethod(
       this.configService.getBondIssuerAddress(), 'issue_bond', adminSecret,
       [Address.fromString(adminAddress).toScVal(), configScVal],
       nonce,
@@ -75,7 +78,7 @@ export class BondsService {
     const bondId = Number(scValToNative(result));
     const bond = await this.buildBondResponse(bondId);
     await this.redis.setEx(`bond:${bondId}`, 300, JSON.stringify(bond));
-    return bond;
+    return { ...bond, transactionHash };
   }
 
   async findAll(page = 1, limit = 20) {
@@ -196,9 +199,7 @@ export class BondsService {
     ]);
 
     const now = Math.floor(Date.now() / 1000);
-    const reached =
-      bond.maturityStatus === BondMaturityStatusEnum.Matured ||
-      now >= bond.maturityDate;
+    const reached = bond.status === BondStatusEnum.Matured || now >= bond.maturityDate;
     const secondsUntil = reached ? 0 : bond.maturityDate - now;
 
     return {
@@ -365,14 +366,47 @@ export class BondsService {
       try {
         const scVal = await this.contractService.simulateCall({
           contractAddress: this.configService.getCouponEngineAddress(),
-          method: 'get_claimable_credits',
-          args: [Address.fromString(address).toScVal(), nativeToScVal(BigInt(bond.id), { type: 'u64' })],
+          method: 'claimable_credits',
+          args: [nativeToScVal(BigInt(bond.id), { type: 'u64' }), Address.fromString(address).toScVal()],
         });
         const amount = toBigIntString(scValToNative(scVal));
         if (amount !== '0') out.push({ bondId: bond.id, amount });
       } catch {}
     }
     return out;
+  }
+
+  /**
+   * Itemized claimable-credit provenance for a single holder on a single bond
+   * (issue #156). Surfaces every period/report/type line so the UI can group
+   * claimable credits exactly as `claim_credits` clears them.
+   */
+  async getClaimableCreditDetails(
+    bondId: number,
+    address?: string,
+  ): Promise<ClaimableCreditsResponse> {
+    if (!address) {
+      throw new BadRequestException('Wallet address is required');
+    }
+    try {
+      Address.fromString(address);
+    } catch {
+      throw new BadRequestException('Invalid wallet address');
+    }
+
+    const scVal = await this.contractService.simulateCall({
+      contractAddress: this.configService.getCouponEngineAddress(),
+      method: 'claimable_credit_details',
+      args: [nativeToScVal(BigInt(bondId), { type: 'u64' }), Address.fromString(address).toScVal()],
+    });
+
+    const raw = scValToNative(scVal);
+    const details = Array.isArray(raw)
+      ? raw.map((entry) => decodeClaimableCreditDetail(entry))
+      : [];
+
+    const total = details.reduce((sum, line) => sum + BigInt(line.amount), 0n);
+    return { bondId, address, total: total.toString(), details };
   }
 
   /**
@@ -669,4 +703,59 @@ export class BondsService {
   private getAdminSecret(): string {
     return this.signingKeys.adminSecret();
   }
+}
+
+/** Coerce a bigint/number SCVal field into a JS number. */
+function toNumber(value: unknown): number {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'bigint') return Number(value);
+  return Number(value ?? 0);
+}
+
+/**
+ * Defensively decode a single `ClaimableCreditDetail` tuple. The contracttype
+ * struct round-trips as either an object (map form) or a positional array,
+ * depending on the XDR encoder version.
+ */
+function decodeClaimableCreditDetail(raw: unknown): ClaimableCreditDetail {
+  if (Array.isArray(raw)) {
+    const [periodIndex, reportId, startTime, endTime, creditType, amount] = raw;
+    return {
+      periodIndex: toNumber(periodIndex),
+      reportId: toNumber(reportId),
+      startTime: toNumber(startTime),
+      endTime: toNumber(endTime),
+      creditType: String(creditType),
+      amount: toBigIntString(amount),
+    };
+  }
+
+  const entry = (raw ?? {}) as Record<string, unknown>;
+  const pick = (key: string) => entry[key] ?? entry[toCamelCase(key)];
+  return {
+    periodIndex: toNumber(pick('period_index')),
+    reportId: toNumber(pick('report_id')),
+    startTime: toNumber(pick('start_time')),
+    endTime: toNumber(pick('end_time')),
+    creditType: String(pick('credit_type') ?? ''),
+    amount: toBigIntString(toBigint(pick('amount'))),
+  };
+}
+
+function toCamelCase(key: string): string {
+  return key.replace(/_([a-z])/g, (_, ch: string) => ch.toUpperCase());
+}
+
+/** Coerce an SCVal amount field into a bigint for string serialization. */
+function toBigint(value: unknown): bigint {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number') return BigInt(Math.trunc(value));
+  if (typeof value === 'string') {
+    try {
+      return BigInt(value);
+    } catch {
+      return 0n;
+    }
+  }
+  return 0n;
 }

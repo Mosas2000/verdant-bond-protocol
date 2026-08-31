@@ -7,6 +7,7 @@ import { MarketplaceListComponent, ORDERS_RETRY_BASE_DELAY_MS, ORDERS_POLL_INTER
 import { ApiService } from '../../shared/services/api.service';
 import { AuthService } from '../../auth/auth.service';
 import { WalletService } from '../../auth/wallet.service';
+import { PendingTransactionsService } from '../../shared/services/pending-transactions.service';
 import { Order, PaginatedResponse } from '../../shared/interfaces/bond.interface';
 
 const ORDER: Order = {
@@ -40,6 +41,7 @@ describe('MarketplaceListComponent', () => {
     isConnected: ReturnType<typeof signal<boolean>>;
     address: ReturnType<typeof signal<string | null>>;
   };
+  let sessionReady: ReturnType<typeof signal<boolean>>;
 
   beforeEach(async () => {
     apiService = {
@@ -64,14 +66,16 @@ describe('MarketplaceListComponent', () => {
       isConnected: signal(true),
       address: signal('GALICE'),
     };
+    sessionReady = signal(true); // existing tests expect an authenticated session, matching prior behavior
 
     await TestBed.configureTestingModule({
       imports: [MarketplaceListComponent],
       providers: [
         provideRouter([]),
         { provide: ApiService, useValue: apiService },
-        { provide: AuthService, useValue: { token: signal(null) } },
+        { provide: AuthService, useValue: { token: signal(null), sessionReady } },
         { provide: WalletService, useValue: walletService },
+        { provide: PendingTransactionsService, useValue: jasmine.createSpyObj('PendingTransactionsService', ['register']) },
       ],
     }).compileComponents();
   });

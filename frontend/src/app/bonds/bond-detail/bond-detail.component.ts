@@ -4,20 +4,30 @@ import { RouterModule, ActivatedRoute } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { ApiService, CouponEligibility } from '../../shared/services/api.service';
 import { WalletService } from '../../auth/wallet.service';
+import { AuthService } from '../../auth/auth.service';
 import { StatusBadgeComponent } from '../../shared/components/status-badge/status-badge.component';
 import { LoadingSpinnerComponent } from '../../shared/components/loading-spinner/loading-spinner.component';
 import { BondDetailReloadCoordinator } from './bond-detail.reload-coordinator';
-import { Bond } from '../../shared/interfaces/bond.interface';
-import { environment } from '../../../environments/environment';
+import { ConnectPromptComponent } from '../../shared/components/connect-prompt/connect-prompt.component';
+import { AdminSecretPromptComponent } from '../../shared/components/admin-secret-prompt/admin-secret-prompt.component';
+import { AdminAccessService } from '../../shared/services/admin-access.service';
+import { AdminIntentService } from '../../shared/services/admin-intent.service';
+import { Bond, ClaimableCreditsResponse } from '../../shared/interfaces/bond.interface';
+import { formatCreditMinorUnits } from '../../shared/utils/credit-format';
 
 @Component({
   selector: 'app-bond-detail',
   standalone: true,
-  imports: [CommonModule, RouterModule, FormsModule, StatusBadgeComponent, LoadingSpinnerComponent],
+  imports: [
+    CommonModule, RouterModule, FormsModule, StatusBadgeComponent, LoadingSpinnerComponent,
+    ConnectPromptComponent, AdminSecretPromptComponent,
+  ],
   providers: [BondDetailReloadCoordinator],
   template: `
     <div class="detail-page">
       <a class="back-link" routerLink="/bonds">← Back to Bonds</a>
+
+      <app-connect-prompt action="Subscribing, claiming credits, and transferring tokens need a signed-in wallet." />
 
       @if (refreshing()) {
         <div class="refresh-banner">Refreshing bond data…</div>
@@ -122,11 +132,14 @@ import { environment } from '../../../environments/environment';
                   />
                   <button
                     class="btn btn-primary subscribe-btn"
-                    [disabled]="!subscribeAmount || subscribeAmount < 1 || subscribeSubmitting()"
+                    [disabled]="!subscribeAmount || subscribeAmount < 1 || subscribeSubmitting() || !authService.sessionReady()"
                     (click)="onSubscribe()"
                   >
                     {{ subscribeSubmitting() ? 'Subscribing...' : 'Subscribe' }}
                   </button>
+                  @if (!authService.sessionReady()) {
+                    <p class="auth-hint">Connect your wallet and sign in to subscribe.</p>
+                  }
                   @if (subscribeSuccess()) {
                     <div class="success-msg">Subscribed! Tx: {{ subscribeTx() }}</div>
                   }
@@ -163,13 +176,38 @@ import { environment } from '../../../environments/environment';
 
             <div class="claim-section">
               <h3 class="section-title">Claim Credits</h3>
+              @if (claimableLoading()) {
+                <div class="muted">Loading claimable credits…</div>
+              } @else if (claimable()) {
+                <div class="claimable-total">
+                  Claimable: {{ fmtCredits(claimable()!.total) }} credits
+                </div>
+                @if (claimable()!.details.length > 0) {
+                  <div class="claimable-detail-title">Provenance</div>
+                  <ul class="claimable-list">
+                    @for (d of claimable()!.details; track d.periodIndex + '-' + d.reportId) {
+                      <li class="claimable-item">
+                        <span class="claimable-period">Period {{ d.periodIndex + 1 }}</span>
+                        <span class="claimable-amount">{{ fmtCredits(d.amount) }}</span>
+                        <span class="claimable-meta">
+                          {{ d.creditType }} · {{ d.startTime * 1000 | date:'mediumDate' }}
+                          – {{ d.endTime * 1000 | date:'mediumDate' }}
+                        </span>
+                      </li>
+                    }
+                  </ul>
+                }
+              }
               <button
                 class="btn btn-primary claim-btn"
-                [disabled]="claimSubmitting()"
+                [disabled]="claimSubmitting() || !authService.sessionReady()"
                 (click)="onClaim()"
               >
                 {{ claimSubmitting() ? 'Claiming...' : 'Claim Accrued Credits' }}
               </button>
+              @if (!authService.sessionReady()) {
+                <p class="auth-hint">Connect your wallet and sign in to claim credits.</p>
+              }
               @if (claimSuccess()) {
                 <div class="success-msg">
                   Claimed {{ claimCredits() }} credits! Tx: {{ claimTx() }}
@@ -212,11 +250,14 @@ import { environment } from '../../../environments/environment';
                   />
                   <button
                     class="btn btn-primary transfer-btn"
-                    [disabled]="!transferTo || !transferAmount || transferAmount < 1 || transferSubmitting()"
+                    [disabled]="!transferTo || !transferAmount || transferAmount < 1 || transferSubmitting() || !authService.sessionReady()"
                     (click)="onTransfer()"
                   >
                     {{ transferSubmitting() ? 'Transferring...' : 'Transfer' }}
                   </button>
+                  @if (!authService.sessionReady()) {
+                    <p class="auth-hint">Connect your wallet and sign in to transfer.</p>
+                  }
                   @if (transferSuccess()) {
                     <div class="success-msg">
                       Transferred {{ transferAmount }} tokens to {{ transferTo }}! Tx: {{ transferTx() }}
@@ -242,11 +283,16 @@ import { environment } from '../../../environments/environment';
                   </div>
                   <button
                     class="btn btn-primary sweep-btn"
-                    [disabled]="undistributed() === 0 || sweepSubmitting()"
+                    [disabled]="undistributed() === 0 || sweepSubmitting() || !authService.sessionReady()"
                     (click)="onSweep()"
                   >
                     {{ sweepSubmitting() ? 'Sweeping...' : 'Sweep Undistributed' }}
                   </button>
+                  @if (adminIntent.hasSecret()) {
+                    <button type="button" class="btn btn-outline lock-btn" (click)="adminIntent.clearAdminSecret()">
+                      Lock admin session
+                    </button>
+                  }
                 } @else if (undistributedError()) {
                   <div class="error-msg">{{ undistributedError() }}</div>
                 } @else {
@@ -261,6 +307,14 @@ import { environment } from '../../../environments/environment';
                   <div class="error-msg">{{ sweepError() }}</div>
                 }
               </div>
+            }
+            @if (secretPromptOpen()) {
+              <app-admin-secret-prompt
+                action="Sweep undistributed coupons"
+                [description]="'Bond #' + b.id + ' — this action is signed and single-use.'"
+                (unlocked)="onSecretUnlocked()"
+                (cancelled)="secretPromptOpen.set(false)"
+              />
             }
           </div>
         </div>
@@ -306,6 +360,7 @@ import { environment } from '../../../environments/environment';
     .form-input { padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.875rem; outline: none; }
     .form-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,0.15); }
     .status-notice { font-size: 0.8125rem; color: #6b7280; padding: 8px 0; }
+    .auth-hint { font-size: 0.75rem; color: #92400e; background: #fffbeb; padding: 6px 10px; border-radius: 6px; margin: 0; }
     .btn { padding: 10px 20px; border-radius: 8px; font-size: 0.875rem; font-weight: 500; cursor: pointer; border: none; text-decoration: none; display: inline-block; text-align: center; }
     .btn-primary { background: #1a1a2e; color: #fff; }
     .btn-primary:hover:not(:disabled) { background: #2a2a4e; }
@@ -318,9 +373,17 @@ import { environment } from '../../../environments/environment';
     .marketplace-link { margin-top: 20px; }
     .claim-section { margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
     .claim-btn, .transfer-btn, .sweep-btn { width: 100%; }
+    .claimable-total { font-size: 0.875rem; font-weight: 600; color: #1a1a2e; margin-bottom: 8px; }
+    .claimable-detail-title { font-size: 0.75rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; margin: 8px 0 4px; }
+    .claimable-list { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 6px; }
+    .claimable-item { display: flex; flex-direction: column; gap: 2px; font-size: 0.8125rem; padding: 6px 10px; background: #f9fafb; border-radius: 6px; }
+    .claimable-period { font-weight: 600; color: #1a1a2e; }
+    .claimable-amount { font-family: monospace; color: #16a34a; }
+    .claimable-meta { color: #6b7280; font-size: 0.75rem; }
     .transfer-section { margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
     .admin-section { margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
     .admin-note { font-size: 0.8125rem; color: #6b7280; padding: 8px 0; }
+    .lock-btn { margin-top: 8px; }
     .undistributed-total { display: flex; flex-direction: column; margin-bottom: 12px; }
     .refresh-banner { padding: 10px 16px; border-radius: 8px; background: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8; font-size: 0.8125rem; margin-bottom: 16px; }
     .refresh-btn { width: 100%; margin-top: 16px; }
@@ -336,6 +399,8 @@ export class BondDetailComponent implements OnInit, OnDestroy {
   private readonly route = inject(ActivatedRoute);
   private readonly apiService = inject(ApiService);
   private readonly walletService = inject(WalletService);
+  private readonly adminAccess = inject(AdminAccessService);
+  readonly adminIntent = inject(AdminIntentService);
   private readonly coordinator = inject(BondDetailReloadCoordinator);
 
   /**
@@ -354,6 +419,8 @@ export class BondDetailComponent implements OnInit, OnDestroy {
   readonly sectionLoading = this.coordinator.sectionLoading;
   readonly error = signal('');
   readonly couponEligibility = signal<CouponEligibility | null>(null);
+  readonly claimable = signal<ClaimableCreditsResponse | null>(null);
+  readonly claimableLoading = signal(false);
   readonly now = signal(Date.now());
   readonly subscribeSubmitting = signal(false);
   readonly subscribeSuccess = signal(false);
@@ -374,10 +441,14 @@ export class BondDetailComponent implements OnInit, OnDestroy {
   readonly sweepSwept = signal(0);
   readonly sweepTx = signal('');
   readonly sweepError = signal('');
+  readonly secretPromptOpen = signal(false);
 
-  readonly isAdmin = computed(
-    () => this.walletService.address() === environment.adminAddress,
-  );
+  /**
+   * Admin detection now goes through `AdminAccessService`, which validates the
+   * configured address instead of comparing against the old 'G...' placeholder
+   * (issue #167).
+   */
+  readonly isAdmin = this.adminAccess.isAdmin;
 
   readonly maturityReached = computed(() => {
     const b = this.bond();
@@ -409,10 +480,39 @@ export class BondDetailComponent implements OnInit, OnDestroy {
     });
   }, { allowSignalWrites: true });
 
+  /**
+   * Load itemized claimable-credit provenance whenever the committed bond
+   * snapshot or the connected wallet changes (#156). Amounts are rendered in
+   * minor units via `formatCreditMinorUnits` (#157).
+   */
+  private readonly claimableEffect = effect(() => {
+    const bond = this.coordinator.detail()?.bond;
+    const address = this.walletService.address();
+    if (!bond) {
+      this.claimable.set(null);
+      return;
+    }
+    this.claimableLoading.set(true);
+    this.apiService.getClaimableCredits(bond.id, address ?? undefined).subscribe({
+      next: (res) => {
+        this.claimable.set(res);
+        this.claimableLoading.set(false);
+      },
+      error: () => {
+        this.claimable.set(null);
+        this.claimableLoading.set(false);
+      },
+    });
+  }, { allowSignalWrites: true });
+
   subscribeAmount = 0;
   transferTo = '';
   transferAmount = 0;
 
+  /** Format a minor-unit credit quantity for display (#157). */
+  fmtCredits(minorUnits: string | number | bigint, maxDecimals?: number): string {
+    return formatCreditMinorUnits(minorUnits, maxDecimals);
+  }
   subscribeProgress(): number {
     const b = this.bond();
     if (!b || Number(b.totalSupply) === 0) return 0;
@@ -474,11 +574,12 @@ export class BondDetailComponent implements OnInit, OnDestroy {
       next: (res) => {
         this.subscribeSuccess.set(true);
         this.subscribeTx.set(res.transactionHash);
+        this.pendingTx.register(res.transactionHash, 'subscribe');
         this.subscribeSubmitting.set(false);
         this.reload(b.id);
       },
       error: (err) => {
-        this.subscribeError.set(err.error?.detail || err.message || 'Subscription failed');
+        this.subscribeError.set(appErrorMessage(err, 'Subscription failed'));
         this.subscribeSubmitting.set(false);
       },
     });
@@ -496,11 +597,12 @@ export class BondDetailComponent implements OnInit, OnDestroy {
         this.claimSuccess.set(true);
         this.claimCredits.set(Number(res.credits));
         this.claimTx.set(res.transactionHash);
+        this.pendingTx.register(res.transactionHash, 'claim');
         this.claimSubmitting.set(false);
         this.reload(b.id);
       },
       error: (err) => {
-        this.claimError.set(err.error?.detail || err.message || 'Claim failed');
+        this.claimError.set(appErrorMessage(err, 'Claim failed'));
         this.claimSubmitting.set(false);
       },
     });
@@ -517,13 +619,14 @@ export class BondDetailComponent implements OnInit, OnDestroy {
       next: (res) => {
         this.transferSuccess.set(true);
         this.transferTx.set(res.transactionHash);
+        this.pendingTx.register(res.transactionHash, 'transfer');
         this.transferSubmitting.set(false);
         this.transferTo = '';
         this.transferAmount = 0;
         this.reload(b.id);
       },
       error: (err) => {
-        this.transferError.set(err.error?.detail || err.message || 'Transfer failed');
+        this.transferError.set(appErrorMessage(err, 'Transfer failed'));
         this.transferSubmitting.set(false);
       },
     });
@@ -539,6 +642,27 @@ export class BondDetailComponent implements OnInit, OnDestroy {
     );
     if (!confirmed) return;
 
+    // The sweep route is behind the API's IntentGuard: without a signed intent
+    // it is a guaranteed 401, so collect the secret first (#166).
+    if (!this.adminIntent.hasSecret()) {
+      this.sweepError.set('');
+      this.secretPromptOpen.set(true);
+      return;
+    }
+
+    this.submitSweep();
+  }
+
+  /** The admin unlocked the session from the prompt: continue the sweep. */
+  onSecretUnlocked(): void {
+    this.secretPromptOpen.set(false);
+    this.submitSweep();
+  }
+
+  private submitSweep(): void {
+    const b = this.bond();
+    if (!b) return;
+
     this.sweepSubmitting.set(true);
     this.sweepSuccess.set(false);
     this.sweepError.set('');
@@ -548,11 +672,12 @@ export class BondDetailComponent implements OnInit, OnDestroy {
         this.sweepSuccess.set(true);
         this.sweepSwept.set(Number(res.swept));
         this.sweepTx.set(res.transactionHash);
+        this.pendingTx.register(res.transactionHash, 'sweep');
         this.sweepSubmitting.set(false);
         this.reload(b.id);
       },
       error: (err) => {
-        this.sweepError.set(err.error?.detail || err.message || 'Sweep failed');
+        this.sweepError.set(appErrorMessage(err, 'Sweep failed'));
         this.sweepSubmitting.set(false);
       },
     });

@@ -1,6 +1,6 @@
 import {
-  Controller, Get, Post, Body, Param, Query, Req,
-  HttpCode, HttpStatus, ParseIntPipe, UseGuards,
+  Controller, Get, Post, Body, Param, Req,
+  HttpCode, HttpStatus, ParseIntPipe, UseGuards, Header, Query,
 } from '@nestjs/common';
 import { OracleService } from './oracle.service';
 import { OracleMonitoringService } from './oracle.monitoring.service';
@@ -11,7 +11,6 @@ import { ChallengeDto } from './dto/challenge.dto';
 import { RegisterProviderDto } from './dto/register-provider.dto';
 import { ListOracleIncidentsDto } from './dto/list-oracle-incidents.dto';
 import { ResolveOracleIncidentDto } from './dto/resolve-oracle-incident.dto';
-import { OracleIncidentRepository } from './oracle-incident.repository';
 import { AdminGuard } from '../common/guards/admin.guard';
 import { IntentGuard } from '../common/guards/intent.guard';
 import { RequireIntent } from '../common/decorators/require-intent.decorator';
@@ -25,8 +24,10 @@ import {
   ChallengeStateResponse,
   ChallengedReportSummary,
   CouponEligibility,
+  OracleAnomalyReport,
 } from './interfaces/oracle.interface';
 import { OracleIncident } from './interfaces/oracle-incident.interface';
+import { OracleIncidentRepository } from './oracle-incident.repository';
 import { PaginatedResponse } from '../common/dto/pagination.dto';
 
 @Controller('oracle')
@@ -124,6 +125,12 @@ export class OracleController {
   @Get('monitoring/staleness')
   async staleness(): Promise<OracleStalenessReport> {
     return this.monitoringService.computeStaleness();
+  }
+
+  @Get('monitoring/anomalies')
+  @Header('Cache-Control', 'no-cache')
+  async anomalies(): Promise<OracleAnomalyReport> {
+    return this.monitoringService.computeCrossSourceAnomalies();
   }
 
   /**

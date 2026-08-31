@@ -7,12 +7,15 @@ import {
   StalenessMetric,
   ProviderStalenessMetric,
   OracleStalenessReport,
+  CrossSourceAssessment,
+  OracleAnomalyReport,
 } from './interfaces/oracle.interface';
 import {
   IncidentDetectionResult,
   OracleIncidentSubjectType,
   OracleIncidentSyncSummary,
 } from './interfaces/oracle-incident.interface';
+import { computeCrossSourceAnomalies } from './anomaly.detector';
 
 const DEFAULT_CADENCE_SECONDS = 365 * 24 * 60 * 60;
 const DEFAULT_GRACE_SECONDS = 30 * 24 * 60 * 60;
@@ -93,6 +96,33 @@ export class OracleMonitoringService {
       asOf: new Date(now).toISOString(),
       projects: projectMetrics,
       providers: providerMetrics,
+    };
+  }
+
+  /**
+   * Compute cross-source anomaly assessments across every project-period
+   * (#158). Reports from independent providers for the same project-period are
+   * compared against a methodology-family tolerance; disagreements beyond
+   * tolerance are surfaced so an operator can investigate a possibly fabricated
+   * or faulty measurement instead of trusting a single source.
+   */
+  async computeCrossSourceAnomalies(now: number = Date.now()): Promise<OracleAnomalyReport> {
+    const anomalies: CrossSourceAssessment[] = [];
+    const projects = await this.projectsService.findAll(1, 1000);
+
+    for (const project of projects.data) {
+      const projectId = String(project.id);
+      try {
+        const reports = await this.oracleService.getProjectReports(projectId);
+        anomalies.push(...computeCrossSourceAnomalies(reports));
+      } catch {
+        // A project whose chain read fails is skipped; it contributes no period.
+      }
+    }
+
+    return {
+      asOf: new Date(now).toISOString(),
+      anomalies,
     };
   }
 

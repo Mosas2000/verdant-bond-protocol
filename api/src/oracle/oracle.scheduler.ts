@@ -49,6 +49,17 @@ export class OracleScheduler {
         `Oracle reliability monitoring cycle completed: ${summary.created} incident(s) created, ` +
           `${summary.updated} updated, ${summary.escalated} escalated`,
       );
+
+      const anomalyReport = await this.monitoringService.computeCrossSourceAnomalies();
+      const flagged = anomalyReport.anomalies.filter(
+        (a) => a.kind === 'outlier' || a.kind === 'conflicting_sources',
+      );
+      if (flagged.length > 0) {
+        this.logger.warn(
+          `Oracle cross-source anomalies detected (#158): ${flagged.length} project-period(s) ` +
+            `flagged (${flagged.filter((a) => a.severity === 'critical').length} critical) for review.`,
+        );
+      }
     } catch (error) {
       this.logger.error(`Oracle reliability monitoring error: ${error.message}`);
     }

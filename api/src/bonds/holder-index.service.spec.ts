@@ -9,8 +9,8 @@ import { nativeToScVal, scValToNative, Keypair } from '@stellar/stellar-sdk';
 process.env.NODE_ENV = 'test';
 process.env.HOLDER_INDEX_STORE = 'memory';
 
-const A = Keypair.random().publicKey();
-const B = Keypair.random().publicKey();
+const A = 'GBLG33K2H6RZKCKNRPA5VEITPHOAEDYL7HN6WS3OYFOL5UAXO5QWHLMI';
+const B = 'GBL5ZNRGB26PBXWIFAKVYZCEI7FRW3RRYZB3MAMJOX77WBCJTLJIVKOB';
 
 function makeService(redis: any, contract: any) {
   const config = { getBondIssuerAddress: jest.fn().mockReturnValue('BOND') };

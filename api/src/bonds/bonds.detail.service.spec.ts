@@ -7,13 +7,8 @@ import { NonceService } from '../common/services/nonce.service';
 import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { ConfigService } from '../config/config.service';
-import {
-  BondResponse,
-  HolderResponse,
-  BondStatusEnum,
-  BondMaturityStatusEnum,
-  CreditTypeEnum,
-} from './interfaces/bond.interface';
+import { HolderIndexService } from './holder-index.service';
+import { BondResponse, HolderResponse, CreditTypeEnum, BondStatusEnum, BondMaturityStatusEnum } from './interfaces/bond.interface';
 
 const dummyBond: BondResponse = {
   id: 7,
@@ -26,6 +21,7 @@ const dummyBond: BondResponse = {
   totalSupply: '1000',
   totalSubscribed: '400',
   status: BondStatusEnum.Active,
+  maturityStatus: BondMaturityStatusEnum.Active,
   createdAt: new Date().toISOString(),
 };
 
@@ -38,6 +34,7 @@ function buildModule() {
   return Test.createTestingModule({
     providers: [
       BondsService,
+      { provide: HolderIndexService, useValue: { getHoldersWithBalances: jest.fn().mockResolvedValue([]) } },
       { provide: ContractService, useValue: { invokeContractMethod: jest.fn(), simulateCall: jest.fn() } },
       { provide: StellarService, useValue: { getKeypairFromSecret: jest.fn() } },
       { provide: NonceService, useValue: { next: jest.fn().mockResolvedValue(1) } },
@@ -60,7 +57,7 @@ describe('BondsService.getBondDetail (issue #4 refresh model)', () => {
     const moduleRef = await buildModule();
     const svc = moduleRef.get(BondsService) as any;
 
-    const bondSpy = jest.spyOn(svc, 'buildBondResponse').mockResolvedValue(dummyBond);
+    const bondSpy = jest.spyOn(svc as any, 'buildBondResponse').mockResolvedValue(dummyBond);
     const holdersSpy = jest.spyOn(svc, 'getHolders').mockResolvedValue({ bondId: 7, holders: dummyHolders, total: dummyHolders.length });
     const couponSpy = jest.spyOn(svc, 'getUndistributedTotal').mockResolvedValue({ bondId: 7, undistributedTotal: '123' });
 
@@ -82,11 +79,7 @@ describe('BondsService.getBondDetail (issue #4 refresh model)', () => {
     const moduleRef = await buildModule();
     const svc = moduleRef.get(BondsService) as any;
 
-    jest.spyOn(svc, 'buildBondResponse').mockResolvedValue({
-      ...dummyBond,
-      status: BondStatusEnum.Matured,
-      maturityStatus: BondMaturityStatusEnum.Matured,
-    });
+    jest.spyOn(svc as any, 'buildBondResponse').mockResolvedValue({ ...dummyBond, status: BondStatusEnum.Matured });
     jest.spyOn(svc, 'getHolders').mockResolvedValue({ bondId: 7, holders: [], total: 0 });
     jest.spyOn(svc, 'getUndistributedTotal').mockResolvedValue({ bondId: 7, undistributedTotal: '0' });
 
@@ -99,7 +92,7 @@ describe('BondsService.getBondDetail (issue #4 refresh model)', () => {
     const moduleRef = await buildModule();
     const svc = moduleRef.get(BondsService) as any;
 
-    const bondSpy = jest.spyOn(svc, 'buildBondResponse').mockResolvedValue(dummyBond);
+    const bondSpy = jest.spyOn(svc as any, 'buildBondResponse').mockResolvedValue(dummyBond);
     const holdersSpy = jest.spyOn(svc, 'getHolders').mockResolvedValue({ bondId: 7, holders: [], total: 0 });
     const couponSpy = jest.spyOn(svc, 'getUndistributedTotal').mockResolvedValue({ bondId: 7, undistributedTotal: '0' });
 

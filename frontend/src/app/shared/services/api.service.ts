@@ -1,6 +1,6 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpErrorResponse, HttpHeaders, HttpParams } from '@angular/common/http';
-import { catchError, Observable, throwError } from 'rxjs';
+import { catchError, defer, Observable, throwError } from 'rxjs';
 import { AuthService } from '../../auth/auth.service';
 import { WalletService } from '../../auth/wallet.service';
 import { AdminIntentService, SignedAdminIntent } from './admin-intent.service';
@@ -11,6 +11,7 @@ import {
   UndistributedTotalResponse, SweepUndistributedResponse,
   QuoteBalanceResponse, QuoteTransactionResponse,
   QuoteAsset, DepositQuoteDto, WithdrawQuoteDto, HolderResponse,
+  ClaimableCreditDetail, ClaimableCreditsResponse,
 } from '../interfaces/bond.interface';
 
 export interface ProblemDetails {
@@ -107,15 +108,16 @@ export class ApiService {
     return headers;
   }
 
-  /** Produce an `x-admin-intent` header for a high-risk admin action (#115). */
-  private adminIntentHeader(action: string, target: string): Record<string, string> | undefined {
-    if (!this.adminIntent.hasSecret) return undefined;
-    try {
-      const intent: SignedAdminIntent = this.adminIntent.create(action, target);
-      return { 'x-admin-intent': JSON.stringify(intent) };
-    } catch {
-      return undefined;
-    }
+  /**
+   * Produce the `x-admin-intent` header for a high-risk admin action (#115).
+   *
+   * The API's `IntentGuard` rejects these routes outright without it, so a
+   * missing or unsignable secret throws here (#166). Previously the header was
+   * silently dropped and the caller saw an unexplained 401.
+   */
+  private adminIntentHeader(action: string, target: string): Record<string, string> {
+    const intent: SignedAdminIntent = this.adminIntent.create(action, target);
+    return { 'x-admin-intent': JSON.stringify(intent) };
   }
 
   /** Generate a stable idempotency key for a user action (#114). */
@@ -153,8 +155,12 @@ export class ApiService {
   }
 
   issueBond(data: CreateBondDto): Observable<Bond> {
-    const headers = this.headers(this.adminIntentHeader('issue_bond', 'global'));
-    return this.withProblemDetails(this.http.post<Bond>('/api/bonds', data, { headers }));
+    // `defer` keeps a missing-admin-secret failure on the observable's error
+    // path rather than throwing synchronously at call time (#166).
+    return this.withProblemDetails(defer(() => {
+      const headers = this.headers(this.adminIntentHeader('issue_bond', 'global'));
+      return this.http.post<Bond>('/api/bonds', data, { headers });
+    }));
   }
 
   subscribeToBond(id: number, amount: number, idempotencyKey?: string): Observable<SubscriptionResponse> {
@@ -194,13 +200,34 @@ export class ApiService {
     ));
   }
 
+  /**
+   * Itemized claimable-credit provenance for a holder (#156). `address` is
+   * optional: when omitted the API resolves the caller's wallet address, so the
+   * connected wallet gets its own itemized breakdown. Amounts are raw minor-unit
+   * strings (#157) and should be rendered with `formatCreditMinorUnits`.
+   */
+  getClaimableCredits(
+    id: number,
+    address?: string,
+  ): Observable<ClaimableCreditsResponse> {
+    const params = address ? new HttpParams().set('address', address) : undefined;
+    return this.withProblemDetails(
+      this.http.get<ClaimableCreditsResponse>(`/api/bonds/${id}/claimable-credits`, {
+        params,
+        headers: this.headers(),
+      }),
+    );
+  }
+
   sweepUndistributed(id: number): Observable<SweepUndistributedResponse> {
-    const headers = this.headers(this.adminIntentHeader('sweep_undistributed', String(id)));
-    return this.withProblemDetails(this.http.post<SweepUndistributedResponse>(
-      `/api/bonds/${id}/sweep-undistributed`,
-      {},
-      { headers },
-    ));
+    return this.withProblemDetails(defer(() => {
+      const headers = this.headers(this.adminIntentHeader('sweep_undistributed', String(id)));
+      return this.http.post<SweepUndistributedResponse>(
+        `/api/bonds/${id}/sweep-undistributed`,
+        {},
+        { headers },
+      );
+    }));
   }
 
   getProjects(page = 1, limit = 20): Observable<PaginatedResponse<Project>> {

@@ -26,6 +26,7 @@ import {
   UndistributedTotalResponse,
   SweepUndistributedResponse,
   BondDetailResponse,
+  ClaimableCreditsResponse,
 } from './interfaces/bond.interface';
 
 @Controller('bonds')
@@ -109,6 +110,15 @@ export class BondsController {
     @Param('id', ParseIntPipe) id: number,
   ): Promise<UndistributedTotalResponse> {
     return this.bondsService.getUndistributedTotal(id);
+  }
+
+  @Get(':id/claimable-credits')
+  @Header('Cache-Control', 'no-cache')
+  async getClaimableCredits(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('address') address?: string,
+  ): Promise<ClaimableCreditsResponse> {
+    return this.bondsService.getClaimableCreditDetails(id, address);
   }
 
   @Post(':id/sweep-undistributed')

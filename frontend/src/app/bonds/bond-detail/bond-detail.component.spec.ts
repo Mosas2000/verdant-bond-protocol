@@ -1,17 +1,26 @@
 import { ComponentFixture, TestBed, fakeAsync, tick, discardPeriodicTasks } from '@angular/core/testing';
+import { signal } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { ActivatedRoute } from '@angular/router';
 import { of } from 'rxjs';
+import { Keypair } from '@stellar/stellar-sdk';
 import { BondDetailComponent } from './bond-detail.component';
 import { ApiService, BondDetailResponse } from '../../shared/services/api.service';
 import { WalletService } from '../../auth/wallet.service';
+import { AdminAccessService } from '../../shared/services/admin-access.service';
+import { AdminIntentService } from '../../shared/services/admin-intent.service';
 import { Bond } from '../../shared/interfaces/bond.interface';
-import { environment } from '../../../environments/environment';
+
+// `environment.adminAddress` now defaults to empty (#167), so the admin account
+// under test is configured explicitly rather than read from the environment.
+const adminKeypair = Keypair.random();
+const ADMIN_ADDRESS = adminKeypair.publicKey();
 
 describe('BondDetailComponent (issue #4 refresh model)', () => {
   let fixture: ComponentFixture<BondDetailComponent>;
   let apiService: jasmine.SpyObj<ApiService>;
   let walletService: WalletService;
+  let sessionReady: ReturnType<typeof signal<boolean>>;
 
   const bond: Bond = {
     id: 1,
@@ -48,14 +57,25 @@ describe('BondDetailComponent (issue #4 refresh model)', () => {
   beforeEach(async () => {
     apiService = jasmine.createSpyObj('ApiService', [
       'getBondDetail', 'subscribeToBond', 'claimCredits', 'transferBond',
-      'sweepUndistributed', 'getCouponEligibility',
+      'sweepUndistributed', 'getCouponEligibility', 'getClaimableCredits',
     ]);
     apiService.getBondDetail.and.returnValue(of(detailFor()));
-    apiService.subscribeToBond.and.returnValue(of({ transactionHash: '0xsub' }));
-    apiService.claimCredits.and.returnValue(of({ credits: 5, transactionHash: '0xclaim' }));
-    apiService.transferBond.and.returnValue(of({ transactionHash: '0xtransfer' }));
+    apiService.getClaimableCredits.and.returnValue(of({
+      bondId: 1,
+      address: 'GAAAA',
+      total: '1500000',
+      details: [
+        { periodIndex: 0, reportId: 1, startTime: 1000, endTime: 2000, creditType: 'Carbon', amount: '1000000' },
+        { periodIndex: 1, reportId: 2, startTime: 2000, endTime: 3000, creditType: 'BlueCarbon', amount: '500000' },
+      ],
+    }));
+    apiService.subscribeToBond.and.returnValue(of({ bondId: 1, subscriber: 'GAAAA', amount: '1', transactionHash: '0xsub' }));
+    apiService.claimCredits.and.returnValue(of({ bondId: 1, investorAddress: 'GAAAA', credits: '5', transactionHash: '0xclaim' }));
+    apiService.transferBond.and.returnValue(of({ bondId: 1, fromAddress: 'GAAAA', toAddress: 'GBBBB', amount: '1', transactionHash: '0xtransfer' }));
     apiService.sweepUndistributed.and.returnValue(of({ bondId: 1, swept: '7', transactionHash: '0xabc' }));
     apiService.getCouponEligibility.and.returnValue(of({ projectId: 'a1b2', eligible: true, reasons: [], blockedByReportIds: [] }));
+
+    sessionReady = signal(true); // existing tests expect an authenticated session, matching prior behavior
 
     await TestBed.configureTestingModule({
       imports: [BondDetailComponent],
@@ -66,11 +86,18 @@ describe('BondDetailComponent (issue #4 refresh model)', () => {
           useValue: { snapshot: { paramMap: { get: () => '1' } } },
         },
         { provide: ApiService, useValue: apiService },
+        { provide: AuthService, useValue: { sessionReady } },
+        { provide: PendingTransactionsService, useValue: jasmine.createSpyObj('PendingTransactionsService', ['register']) },
         WalletService,
       ],
     }).compileComponents();
 
     walletService = TestBed.inject(WalletService);
+
+    TestBed.inject(AdminAccessService).adminAddress.set(ADMIN_ADDRESS);
+    // The sweep route requires a signed step-up intent (#166); unlock the admin
+    // session so the existing sweep expectations still exercise the request.
+    TestBed.inject(AdminIntentService).setAdminSecret(adminKeypair.secret());
   });
 
   afterEach(() => {
@@ -96,7 +123,7 @@ describe('BondDetailComponent (issue #4 refresh model)', () => {
   }));
 
   it('shows the undistributed total to the admin wallet', fakeAsync(() => {
-    walletService.address.set(environment.adminAddress);
+    walletService.address.set(ADMIN_ADDRESS);
     createFixture();
 
     const section = adminSection();
@@ -122,8 +149,20 @@ describe('BondDetailComponent (issue #4 refresh model)', () => {
     discardPeriodicTasks();
   }));
 
+  it('renders itemized claimable-credit provenance with minor-unit formatting (#156/#157)', fakeAsync(() => {
+    createFixture();
+
+    expect(apiService.getClaimableCredits).toHaveBeenCalled();
+    const text = fixture.nativeElement.textContent;
+    expect(text).toContain('Claimable: 1.5 credits');
+    expect(text).toContain('Period 1');
+    expect(text).toContain('Period 2');
+    expect(text).toContain('BlueCarbon');
+    discardPeriodicTasks();
+  }));
+
   it('sweeps undistributed credits only after confirmation', fakeAsync(() => {
-    walletService.address.set(environment.adminAddress);
+    walletService.address.set(ADMIN_ADDRESS);
     createFixture();
 
     const confirmSpy = spyOn(window, 'confirm').and.returnValue(true);
@@ -139,7 +178,7 @@ describe('BondDetailComponent (issue #4 refresh model)', () => {
   }));
 
   it('does not sweep when confirmation is declined', fakeAsync(() => {
-    walletService.address.set(environment.adminAddress);
+    walletService.address.set(ADMIN_ADDRESS);
     createFixture();
 
     spyOn(window, 'confirm').and.returnValue(false);

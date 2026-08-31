@@ -24,6 +24,7 @@ export interface OrderResponse {
   quoteAsset: QuoteAsset;
   status: OrderStatus;
   createdAt: string;
+  expiresAt: string;
 }
 
 export interface QuoteBalanceResponse {

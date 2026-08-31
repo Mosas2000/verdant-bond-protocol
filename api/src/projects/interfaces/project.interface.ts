@@ -16,6 +16,8 @@ export interface ProjectResponse {
   totalAreaHa: number;
   carbonSequestrationEstimate: number;
   createdAt: string;
+  /** Only present on the response to a just-submitted registration; absent on reads. */
+  transactionHash?: string;
 }
 
 export interface DocumentUploadResponse {

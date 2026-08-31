@@ -184,6 +184,44 @@ These power the API's `GET /oracle/stats/:providerAddress` endpoint and the
 log-based staleness alerting described in
 [`runbook-degraded-providers.md`](./runbook-degraded-providers.md).
 
+## Cross-Source Anomaly Detection (#158)
+
+Independent reports for the same project-period from different providers can be
+compared so a single faulty, manipulated, or mis-entered measurement is not
+accepted at face value. The monitor (and the API) compute a tolerance-based
+cross-source assessment over the verified reports in each project-period:
+
+- **Inputs.** Each `Verified` report contributes `(provider, methodology,
+  carbonSequestered, periodStart, periodEnd)`. Reports are clustered by
+  `projectId + (periodStart, periodEnd)` so each period is assessed separately.
+- **Methodology families.** A methodology string is normalized to a family key
+  (`VERRA-VCS`, `REMOTE-SENSING`, `IOT-SENSORS`, `BLUE-CARBON`, or `UNKNOWN`),
+  and each family carries a relative tolerance (`METHODOLOGY_TOLERANCE`):
+  VERRA-VCS 15%, REMOTE-SENSING 25%, IOT-SENSORS 35%, BLUE-CARBON 30%, default
+  30%.
+- **Algorithm.** For each cluster: with fewer than two sources the assessment is
+  `missing_source` (no cross-check possible). Otherwise each source's deviation
+  from the cluster median is compared against the family tolerance:
+  - all within tolerance → `normal` (info),
+  - exactly one source beyond tolerance → `outlier`,
+  - two or more sources beyond tolerance → `conflicting_sources`.
+  - A source deviating beyond **twice** the tolerance escalates the assessment
+    to `critical` (otherwise `warning`).
+
+Monitors and operators use these assessments to route investigation (e.g. a
+remote-sensing outlier versus a registry estimate), and `critical` findings are
+surfaced by the reliability scheduler.
+
+Surfaces:
+
+- Standalone oracle monitor: `POST /oracle/anomaly` (own service) and reusable
+  `assessCrossSourceAnomaly` / `groupAndAssess` in `oracle/anomaly.ts`.
+- API: `GET /oracle/monitoring/anomalies` → `OracleAnomalyReport` (computed by
+  `OracleMonitoringService.computeCrossSourceAnomalies` over on-chain reports),
+  and the 6-hourly `OracleScheduler` reliability cycle logs any `outlier` /
+  `conflicting_sources` periods for review.
+
+
 ## Security Model
 - Provider whitelist (admin-managed)
 - Provider staking: committed collateral underwrites report quality; `add_stake` / `withdraw_stake` manage exposure

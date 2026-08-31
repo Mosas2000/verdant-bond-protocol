@@ -2,13 +2,13 @@
   "records": {
     "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF": {
       "address": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-      "status": "verified",
-      "source": "provider",
+      "status": "pending",
+      "source": "system",
       "actor": null,
-      "reason": "KYC verification completed",
-      "providerReference": "original-vendor-1",
-      "createdAt": 1788161562760,
-      "updatedAt": 1788161562760,
+      "reason": "Initial KYC record created on first lookup",
+      "providerReference": null,
+      "createdAt": 1788135215873,
+      "updatedAt": 1788135215873,
       "expiresAt": null
     }
   },

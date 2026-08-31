@@ -17,6 +17,7 @@ export interface ReportResponse {
   status: ReportStatus;
   createdAt: string;
   verifiedAt?: string;
+  providerStakeAtVerification?: string;
 }
 
 export interface ChallengeResponse {
@@ -119,5 +120,31 @@ export interface CouponEligibility {
   eligible: boolean;
   reasons: string[];
   blockedByReportIds: number[];
+}
+
+export type CrossSourceAnomalyKind =
+  | 'normal'
+  | 'outlier'
+  | 'conflicting_sources'
+  | 'missing_source';
+
+export interface CrossSourceAssessment {
+  projectId: string;
+  periodKey: string;
+  kind: CrossSourceAnomalyKind;
+  severity: 'info' | 'warning' | 'critical';
+  median: number | null;
+  deviations: Array<{
+    sourceId: string;
+    value: number;
+    deviation: number | null;
+  }>;
+  tolerance: number;
+  reason: string;
+}
+
+export interface OracleAnomalyReport {
+  asOf: string;
+  anomalies: CrossSourceAssessment[];
 }
 

@@ -10,6 +10,8 @@ export interface Bond {
   totalSubscribed: string;
   status: 'Active' | 'Matured' | 'Defaulted';
   createdAt: string;
+  /** Only present on the response to a just-submitted issuance; absent on reads. */
+  transactionHash?: string;
 }
 
 export interface CreateBondDto {
@@ -31,6 +33,26 @@ export interface HolderResponse {
   balance: string;
 }
 
+/**
+ * A single period/report/credit-type accrual of claimable credits for a holder
+ * (#156). `amount` is in credit minor units (6 decimals, #157).
+ */
+export interface ClaimableCreditDetail {
+  periodIndex: number;
+  reportId: number;
+  startTime: number;
+  endTime: number;
+  creditType: 'Carbon' | 'Biodiversity' | 'Basket' | 'BlueCarbon';
+  amount: string;
+}
+
+export interface ClaimableCreditsResponse {
+  bondId: number;
+  address: string;
+  total: string;
+  details: ClaimableCreditDetail[];
+}
+
 export interface Project {
   id: number;
   name: string;
@@ -42,6 +64,8 @@ export interface Project {
   totalAreaHa: number;
   carbonSequestrationEstimate: number;
   createdAt: string;
+  /** Only present on the response to a just-submitted registration; absent on reads. */
+  transactionHash?: string;
 }
 
 export interface ProjectProvenanceEvent {
@@ -69,6 +93,7 @@ export interface Order {
   quoteAsset: QuoteAsset;
   status: 'Open' | 'PartiallyFilled' | 'Filled' | 'Cancelled' | 'Expired';
   createdAt: string;
+  expiresAt: string;
 }
 
 export interface OrderQueryParams {
@@ -166,4 +191,12 @@ export interface WithdrawQuoteDto {
   asset: QuoteAsset;
   amount: number;
   nonce?: number;
+}
+
+// Mirrors api/src/stellar/contract.service.ts's TransactionStatus/TransactionStatusResult.
+export type TransactionStatus = 'pending' | 'confirmed' | 'failed';
+
+export interface TransactionStatusResponse {
+  hash: string;
+  status: TransactionStatus;
 }
