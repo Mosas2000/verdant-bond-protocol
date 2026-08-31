@@ -7,17 +7,25 @@ import { WalletService } from '../../auth/wallet.service';
 import { StatusBadgeComponent } from '../../shared/components/status-badge/status-badge.component';
 import { LoadingSpinnerComponent } from '../../shared/components/loading-spinner/loading-spinner.component';
 import { BondDetailReloadCoordinator } from './bond-detail.reload-coordinator';
+import { ConnectPromptComponent } from '../../shared/components/connect-prompt/connect-prompt.component';
+import { AdminSecretPromptComponent } from '../../shared/components/admin-secret-prompt/admin-secret-prompt.component';
+import { AdminAccessService } from '../../shared/services/admin-access.service';
+import { AdminIntentService } from '../../shared/services/admin-intent.service';
 import { Bond } from '../../shared/interfaces/bond.interface';
-import { environment } from '../../../environments/environment';
 
 @Component({
   selector: 'app-bond-detail',
   standalone: true,
-  imports: [CommonModule, RouterModule, FormsModule, StatusBadgeComponent, LoadingSpinnerComponent],
+  imports: [
+    CommonModule, RouterModule, FormsModule, StatusBadgeComponent, LoadingSpinnerComponent,
+    ConnectPromptComponent, AdminSecretPromptComponent,
+  ],
   providers: [BondDetailReloadCoordinator],
   template: `
     <div class="detail-page">
       <a class="back-link" routerLink="/bonds">← Back to Bonds</a>
+
+      <app-connect-prompt action="Subscribing, claiming credits, and transferring tokens need a signed-in wallet." />
 
       @if (refreshing()) {
         <div class="refresh-banner">Refreshing bond data…</div>
@@ -247,6 +255,11 @@ import { environment } from '../../../environments/environment';
                   >
                     {{ sweepSubmitting() ? 'Sweeping...' : 'Sweep Undistributed' }}
                   </button>
+                  @if (adminIntent.hasSecret()) {
+                    <button type="button" class="btn btn-outline lock-btn" (click)="adminIntent.clearAdminSecret()">
+                      Lock admin session
+                    </button>
+                  }
                 } @else if (undistributedError()) {
                   <div class="error-msg">{{ undistributedError() }}</div>
                 } @else {
@@ -261,6 +274,14 @@ import { environment } from '../../../environments/environment';
                   <div class="error-msg">{{ sweepError() }}</div>
                 }
               </div>
+            }
+            @if (secretPromptOpen()) {
+              <app-admin-secret-prompt
+                action="Sweep undistributed coupons"
+                [description]="'Bond #' + b.id + ' — this action is signed and single-use.'"
+                (unlocked)="onSecretUnlocked()"
+                (cancelled)="secretPromptOpen.set(false)"
+              />
             }
           </div>
         </div>
@@ -321,6 +342,7 @@ import { environment } from '../../../environments/environment';
     .transfer-section { margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
     .admin-section { margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
     .admin-note { font-size: 0.8125rem; color: #6b7280; padding: 8px 0; }
+    .lock-btn { margin-top: 8px; }
     .undistributed-total { display: flex; flex-direction: column; margin-bottom: 12px; }
     .refresh-banner { padding: 10px 16px; border-radius: 8px; background: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8; font-size: 0.8125rem; margin-bottom: 16px; }
     .refresh-btn { width: 100%; margin-top: 16px; }
@@ -336,6 +358,8 @@ export class BondDetailComponent implements OnInit, OnDestroy {
   private readonly route = inject(ActivatedRoute);
   private readonly apiService = inject(ApiService);
   private readonly walletService = inject(WalletService);
+  private readonly adminAccess = inject(AdminAccessService);
+  readonly adminIntent = inject(AdminIntentService);
   private readonly coordinator = inject(BondDetailReloadCoordinator);
 
   /**
@@ -374,10 +398,14 @@ export class BondDetailComponent implements OnInit, OnDestroy {
   readonly sweepSwept = signal(0);
   readonly sweepTx = signal('');
   readonly sweepError = signal('');
+  readonly secretPromptOpen = signal(false);
 
-  readonly isAdmin = computed(
-    () => this.walletService.address() === environment.adminAddress,
-  );
+  /**
+   * Admin detection now goes through `AdminAccessService`, which validates the
+   * configured address instead of comparing against the old 'G...' placeholder
+   * (issue #167).
+   */
+  readonly isAdmin = this.adminAccess.isAdmin;
 
   readonly maturityReached = computed(() => {
     const b = this.bond();
@@ -538,6 +566,27 @@ export class BondDetailComponent implements OnInit, OnDestroy {
       `Sweep ${total} undistributed credits from Bond #${b.id}? This will reset the undistributed balance to zero.`,
     );
     if (!confirmed) return;
+
+    // The sweep route is behind the API's IntentGuard: without a signed intent
+    // it is a guaranteed 401, so collect the secret first (#166).
+    if (!this.adminIntent.hasSecret()) {
+      this.sweepError.set('');
+      this.secretPromptOpen.set(true);
+      return;
+    }
+
+    this.submitSweep();
+  }
+
+  /** The admin unlocked the session from the prompt: continue the sweep. */
+  onSecretUnlocked(): void {
+    this.secretPromptOpen.set(false);
+    this.submitSweep();
+  }
+
+  private submitSweep(): void {
+    const b = this.bond();
+    if (!b) return;
 
     this.sweepSubmitting.set(true);
     this.sweepSuccess.set(false);

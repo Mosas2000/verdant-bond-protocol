@@ -1,9 +1,30 @@
-import { Injectable, signal } from '@angular/core';
-import { isConnected, getAddress, signTransaction } from '@stellar/freighter-api';
+import { Injectable, inject, signal } from '@angular/core';
 import { environment } from '../../environments/environment';
+import { FREIGHTER_API } from './freighter-api.token';
+
+/**
+ * Lifecycle of the Freighter connection. `network_mismatch` and
+ * `account_changed` are recoverable states: the wallet is reachable but the
+ * session cannot be trusted until the user acts.
+ */
+export type WalletStatus =
+  | 'idle'
+  | 'connecting'
+  | 'connected'
+  | 'missing'
+  | 'locked'
+  | 'rejected'
+  | 'network_mismatch'
+  | 'account_changed'
+  | 'error';
+
+/** Human-readable label for the network this build talks to. */
+const EXPECTED_NETWORK_LABEL = environment.stellarNetwork;
 
 @Injectable({ providedIn: 'root' })
 export class WalletService {
+  private readonly freighter = inject(FREIGHTER_API);
+
   readonly address = signal<string | null>(null);
   readonly isConnected = signal(false);
   readonly isConnecting = signal(false);
@@ -18,13 +39,13 @@ export class WalletService {
     this.status.set('connecting');
     this.errorMessage.set(null);
     try {
-      const connected = await isConnected();
+      const connected = await this.freighter.isConnected();
       if (!connected.isConnected) {
         this.status.set('missing');
         this.errorMessage.set('Freighter is not installed or is unavailable.');
         throw new Error('Freighter not detected');
       }
-      const { address } = await getAddress();
+      const { address } = await this.freighter.getAddress();
       if (!address) {
         this.status.set('locked');
         this.errorMessage.set('Unlock Freighter and try again.');
@@ -49,7 +70,7 @@ export class WalletService {
 
   async signChallenge(challenge: string): Promise<string> {
     await this.verifyNetwork();
-    const { signedTxXdr } = await signTransaction(challenge, {
+    const { signedTxXdr } = await this.freighter.signTransaction(challenge, {
       networkPassphrase: environment.networkPassphrase,
     });
     return signedTxXdr;
@@ -67,7 +88,7 @@ export class WalletService {
   async refreshAccountState(): Promise<void> {
     if (!this.isConnected()) return;
     try {
-      const { address } = await getAddress();
+      const { address } = await this.freighter.getAddress();
       if (address && address !== this.address()) {
         this.address.set(address);
         this.status.set('account_changed');
@@ -75,20 +96,44 @@ export class WalletService {
       }
       await this.verifyNetwork();
     } catch {
+      // `verifyNetwork` already reports a mismatch precisely; do not flatten it
+      // into the generic "locked" message.
+      if (this.status() === 'network_mismatch') return;
       this.status.set('locked');
       this.errorMessage.set('Freighter is locked or unavailable.');
       this.isConnected.set(false);
     }
   }
 
+  /**
+   * Confirm Freighter is pointed at the same Stellar network this build talks
+   * to. Signing against the wrong network produces transactions the API will
+   * reject, so every connect and every signature goes through here first.
+   */
   private async verifyNetwork(): Promise<void> {
-    const network = await getNetwork();
-    const passphrase = typeof network === 'string' ? network : network.networkPassphrase;
+    const network = await this.freighter.getNetwork();
+    if (network?.error) {
+      this.status.set('error');
+      this.errorMessage.set('Could not read the active Freighter network. Unlock Freighter and try again.');
+      throw new Error('Unable to read the Freighter network');
+    }
+
+    const passphrase = network?.networkPassphrase ?? '';
     this.networkPassphrase.set(passphrase);
     if (passphrase !== this.expectedNetworkPassphrase) {
+      const actual = network?.network || 'an unknown network';
       this.status.set('network_mismatch');
-      this.errorMessage.set('Switch Freighter to the configured Stellar network before continuing.');
+      this.errorMessage.set(
+        `Freighter is connected to ${actual}, but this app runs on ${EXPECTED_NETWORK_LABEL}. ` +
+          'Switch networks in Freighter and reconnect.',
+      );
       throw new Error('Freighter network mismatch');
+    }
+
+    // The network is good again: clear a stale mismatch banner.
+    if (this.status() === 'network_mismatch') {
+      this.status.set(this.isConnected() ? 'connected' : 'idle');
+      this.errorMessage.set(null);
     }
   }
 

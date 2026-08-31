@@ -2,11 +2,18 @@ import { ComponentFixture, TestBed, fakeAsync, tick, discardPeriodicTasks } from
 import { provideRouter } from '@angular/router';
 import { ActivatedRoute } from '@angular/router';
 import { of } from 'rxjs';
+import { Keypair } from '@stellar/stellar-sdk';
 import { BondDetailComponent } from './bond-detail.component';
 import { ApiService, BondDetailResponse } from '../../shared/services/api.service';
 import { WalletService } from '../../auth/wallet.service';
+import { AdminAccessService } from '../../shared/services/admin-access.service';
+import { AdminIntentService } from '../../shared/services/admin-intent.service';
 import { Bond } from '../../shared/interfaces/bond.interface';
-import { environment } from '../../../environments/environment';
+
+// `environment.adminAddress` now defaults to empty (#167), so the admin account
+// under test is configured explicitly rather than read from the environment.
+const adminKeypair = Keypair.random();
+const ADMIN_ADDRESS = adminKeypair.publicKey();
 
 describe('BondDetailComponent (issue #4 refresh model)', () => {
   let fixture: ComponentFixture<BondDetailComponent>;
@@ -71,6 +78,11 @@ describe('BondDetailComponent (issue #4 refresh model)', () => {
     }).compileComponents();
 
     walletService = TestBed.inject(WalletService);
+
+    TestBed.inject(AdminAccessService).adminAddress.set(ADMIN_ADDRESS);
+    // The sweep route requires a signed step-up intent (#166); unlock the admin
+    // session so the existing sweep expectations still exercise the request.
+    TestBed.inject(AdminIntentService).setAdminSecret(adminKeypair.secret());
   });
 
   afterEach(() => {
@@ -96,7 +108,7 @@ describe('BondDetailComponent (issue #4 refresh model)', () => {
   }));
 
   it('shows the undistributed total to the admin wallet', fakeAsync(() => {
-    walletService.address.set(environment.adminAddress);
+    walletService.address.set(ADMIN_ADDRESS);
     createFixture();
 
     const section = adminSection();
@@ -123,7 +135,7 @@ describe('BondDetailComponent (issue #4 refresh model)', () => {
   }));
 
   it('sweeps undistributed credits only after confirmation', fakeAsync(() => {
-    walletService.address.set(environment.adminAddress);
+    walletService.address.set(ADMIN_ADDRESS);
     createFixture();
 
     const confirmSpy = spyOn(window, 'confirm').and.returnValue(true);
@@ -139,7 +151,7 @@ describe('BondDetailComponent (issue #4 refresh model)', () => {
   }));
 
   it('does not sweep when confirmation is declined', fakeAsync(() => {
-    walletService.address.set(environment.adminAddress);
+    walletService.address.set(ADMIN_ADDRESS);
     createFixture();
 
     spyOn(window, 'confirm').and.returnValue(false);
