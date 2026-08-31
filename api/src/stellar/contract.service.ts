@@ -28,6 +28,16 @@ export interface ContractCallResult {
   successful: boolean;
 }
 
+// sendTransaction() returns as soon as Soroban RPC *accepts* the transaction,
+// not once it's actually applied to the ledger. Callers that need to know the
+// final outcome should poll getTransactionStatus() with the returned hash.
+export type TransactionStatus = 'pending' | 'confirmed' | 'failed';
+
+export interface TransactionStatusResult {
+  hash: string;
+  status: TransactionStatus;
+}
+
 @Injectable()
 export class ContractService {
   private sorobanRpc: rpc.Server;
@@ -318,5 +328,24 @@ export class ContractService {
 
   getSorobanRpc(): rpc.Server {
     return this.sorobanRpc;
+  }
+
+  /** Polls the final on-ledger outcome of a transaction submitted via
+   *  sendTransaction(). 'pending' covers both "not yet applied" and
+   *  "RPC hasn't indexed it yet" (both map to NOT_FOUND). */
+  async getTransactionStatus(hash: string): Promise<TransactionStatusResult> {
+    const response = await this.sorobanRpc.getTransaction(hash);
+    let status: TransactionStatus;
+    switch (response.status) {
+      case rpc.Api.GetTransactionStatus.SUCCESS:
+        status = 'confirmed';
+        break;
+      case rpc.Api.GetTransactionStatus.FAILED:
+        status = 'failed';
+        break;
+      default:
+        status = 'pending';
+    }
+    return { hash, status };
   }
 }

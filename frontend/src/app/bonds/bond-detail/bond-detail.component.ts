@@ -4,6 +4,7 @@ import { RouterModule, ActivatedRoute } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { ApiService, CouponEligibility } from '../../shared/services/api.service';
 import { WalletService } from '../../auth/wallet.service';
+import { AuthService } from '../../auth/auth.service';
 import { StatusBadgeComponent } from '../../shared/components/status-badge/status-badge.component';
 import { LoadingSpinnerComponent } from '../../shared/components/loading-spinner/loading-spinner.component';
 import { BondDetailReloadCoordinator } from './bond-detail.reload-coordinator';
@@ -130,11 +131,14 @@ import { Bond } from '../../shared/interfaces/bond.interface';
                   />
                   <button
                     class="btn btn-primary subscribe-btn"
-                    [disabled]="!subscribeAmount || subscribeAmount < 1 || subscribeSubmitting()"
+                    [disabled]="!subscribeAmount || subscribeAmount < 1 || subscribeSubmitting() || !authService.sessionReady()"
                     (click)="onSubscribe()"
                   >
                     {{ subscribeSubmitting() ? 'Subscribing...' : 'Subscribe' }}
                   </button>
+                  @if (!authService.sessionReady()) {
+                    <p class="auth-hint">Connect your wallet and sign in to subscribe.</p>
+                  }
                   @if (subscribeSuccess()) {
                     <div class="success-msg">Subscribed! Tx: {{ subscribeTx() }}</div>
                   }
@@ -173,11 +177,14 @@ import { Bond } from '../../shared/interfaces/bond.interface';
               <h3 class="section-title">Claim Credits</h3>
               <button
                 class="btn btn-primary claim-btn"
-                [disabled]="claimSubmitting()"
+                [disabled]="claimSubmitting() || !authService.sessionReady()"
                 (click)="onClaim()"
               >
                 {{ claimSubmitting() ? 'Claiming...' : 'Claim Accrued Credits' }}
               </button>
+              @if (!authService.sessionReady()) {
+                <p class="auth-hint">Connect your wallet and sign in to claim credits.</p>
+              }
               @if (claimSuccess()) {
                 <div class="success-msg">
                   Claimed {{ claimCredits() }} credits! Tx: {{ claimTx() }}
@@ -220,11 +227,14 @@ import { Bond } from '../../shared/interfaces/bond.interface';
                   />
                   <button
                     class="btn btn-primary transfer-btn"
-                    [disabled]="!transferTo || !transferAmount || transferAmount < 1 || transferSubmitting()"
+                    [disabled]="!transferTo || !transferAmount || transferAmount < 1 || transferSubmitting() || !authService.sessionReady()"
                     (click)="onTransfer()"
                   >
                     {{ transferSubmitting() ? 'Transferring...' : 'Transfer' }}
                   </button>
+                  @if (!authService.sessionReady()) {
+                    <p class="auth-hint">Connect your wallet and sign in to transfer.</p>
+                  }
                   @if (transferSuccess()) {
                     <div class="success-msg">
                       Transferred {{ transferAmount }} tokens to {{ transferTo }}! Tx: {{ transferTx() }}
@@ -250,7 +260,7 @@ import { Bond } from '../../shared/interfaces/bond.interface';
                   </div>
                   <button
                     class="btn btn-primary sweep-btn"
-                    [disabled]="undistributed() === 0 || sweepSubmitting()"
+                    [disabled]="undistributed() === 0 || sweepSubmitting() || !authService.sessionReady()"
                     (click)="onSweep()"
                   >
                     {{ sweepSubmitting() ? 'Sweeping...' : 'Sweep Undistributed' }}
@@ -327,6 +337,7 @@ import { Bond } from '../../shared/interfaces/bond.interface';
     .form-input { padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.875rem; outline: none; }
     .form-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,0.15); }
     .status-notice { font-size: 0.8125rem; color: #6b7280; padding: 8px 0; }
+    .auth-hint { font-size: 0.75rem; color: #92400e; background: #fffbeb; padding: 6px 10px; border-radius: 6px; margin: 0; }
     .btn { padding: 10px 20px; border-radius: 8px; font-size: 0.875rem; font-weight: 500; cursor: pointer; border: none; text-decoration: none; display: inline-block; text-align: center; }
     .btn-primary { background: #1a1a2e; color: #fff; }
     .btn-primary:hover:not(:disabled) { background: #2a2a4e; }
@@ -502,11 +513,12 @@ export class BondDetailComponent implements OnInit, OnDestroy {
       next: (res) => {
         this.subscribeSuccess.set(true);
         this.subscribeTx.set(res.transactionHash);
+        this.pendingTx.register(res.transactionHash, 'subscribe');
         this.subscribeSubmitting.set(false);
         this.reload(b.id);
       },
       error: (err) => {
-        this.subscribeError.set(err.error?.detail || err.message || 'Subscription failed');
+        this.subscribeError.set(appErrorMessage(err, 'Subscription failed'));
         this.subscribeSubmitting.set(false);
       },
     });
@@ -524,11 +536,12 @@ export class BondDetailComponent implements OnInit, OnDestroy {
         this.claimSuccess.set(true);
         this.claimCredits.set(Number(res.credits));
         this.claimTx.set(res.transactionHash);
+        this.pendingTx.register(res.transactionHash, 'claim');
         this.claimSubmitting.set(false);
         this.reload(b.id);
       },
       error: (err) => {
-        this.claimError.set(err.error?.detail || err.message || 'Claim failed');
+        this.claimError.set(appErrorMessage(err, 'Claim failed'));
         this.claimSubmitting.set(false);
       },
     });
@@ -545,13 +558,14 @@ export class BondDetailComponent implements OnInit, OnDestroy {
       next: (res) => {
         this.transferSuccess.set(true);
         this.transferTx.set(res.transactionHash);
+        this.pendingTx.register(res.transactionHash, 'transfer');
         this.transferSubmitting.set(false);
         this.transferTo = '';
         this.transferAmount = 0;
         this.reload(b.id);
       },
       error: (err) => {
-        this.transferError.set(err.error?.detail || err.message || 'Transfer failed');
+        this.transferError.set(appErrorMessage(err, 'Transfer failed'));
         this.transferSubmitting.set(false);
       },
     });
@@ -597,11 +611,12 @@ export class BondDetailComponent implements OnInit, OnDestroy {
         this.sweepSuccess.set(true);
         this.sweepSwept.set(Number(res.swept));
         this.sweepTx.set(res.transactionHash);
+        this.pendingTx.register(res.transactionHash, 'sweep');
         this.sweepSubmitting.set(false);
         this.reload(b.id);
       },
       error: (err) => {
-        this.sweepError.set(err.error?.detail || err.message || 'Sweep failed');
+        this.sweepError.set(appErrorMessage(err, 'Sweep failed'));
         this.sweepSubmitting.set(false);
       },
     });

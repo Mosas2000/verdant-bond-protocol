@@ -1,4 +1,5 @@
 import { ComponentFixture, TestBed, fakeAsync, tick, discardPeriodicTasks } from '@angular/core/testing';
+import { signal } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { ActivatedRoute } from '@angular/router';
 import { of } from 'rxjs';
@@ -19,6 +20,7 @@ describe('BondDetailComponent (issue #4 refresh model)', () => {
   let fixture: ComponentFixture<BondDetailComponent>;
   let apiService: jasmine.SpyObj<ApiService>;
   let walletService: WalletService;
+  let sessionReady: ReturnType<typeof signal<boolean>>;
 
   const bond: Bond = {
     id: 1,
@@ -64,6 +66,8 @@ describe('BondDetailComponent (issue #4 refresh model)', () => {
     apiService.sweepUndistributed.and.returnValue(of({ bondId: 1, swept: '7', transactionHash: '0xabc' }));
     apiService.getCouponEligibility.and.returnValue(of({ projectId: 'a1b2', eligible: true, reasons: [], blockedByReportIds: [] }));
 
+    sessionReady = signal(true); // existing tests expect an authenticated session, matching prior behavior
+
     await TestBed.configureTestingModule({
       imports: [BondDetailComponent],
       providers: [
@@ -73,6 +77,8 @@ describe('BondDetailComponent (issue #4 refresh model)', () => {
           useValue: { snapshot: { paramMap: { get: () => '1' } } },
         },
         { provide: ApiService, useValue: apiService },
+        { provide: AuthService, useValue: { sessionReady } },
+        { provide: PendingTransactionsService, useValue: jasmine.createSpyObj('PendingTransactionsService', ['register']) },
         WalletService,
       ],
     }).compileComponents();

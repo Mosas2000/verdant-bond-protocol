@@ -7,6 +7,7 @@ import { WalletService } from '../../auth/wallet.service';
 import { QuoteBalanceComponent } from '../../shared/components/quote-balance/quote-balance.component';
 import { HeldBond } from '../../shared/interfaces/bond.interface';
 import { appErrorMessage } from '../../shared/errors/api-error';
+import { PendingTransactionsService } from '../../shared/services/pending-transactions.service';
 
 @Component({
   selector: 'app-marketplace-sell',
@@ -115,6 +116,7 @@ export class MarketplaceSellComponent implements OnInit {
   private readonly apiService = inject(ApiService);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
+  private readonly pendingTx = inject(PendingTransactionsService);
   readonly walletService = inject(WalletService);
 
   readonly bonds = signal<HeldBond[]>([]);
@@ -179,7 +181,8 @@ export class MarketplaceSellComponent implements OnInit {
     if (!formValue.expiresAfterSeconds) delete formValue.expiresAfterSeconds;
 
     this.apiService.listBondTokens(formValue).subscribe({
-      next: () => {
+      next: (res) => {
+        this.pendingTx.register(res.transactionHash, 'list');
         this.router.navigate(['/marketplace']);
       },
       error: (err) => {

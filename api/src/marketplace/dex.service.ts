@@ -93,7 +93,7 @@ export class DexService {
     const adminSecret = this.getAdminSecret();
     const nonce = await this.nonceService.next(this.configService.getDexRouterAddress(), sellerAddress);
 
-    const { result } = await this.contractService.invokeContractMethod(
+    const { result, transactionHash } = await this.contractService.invokeContractMethod(
       this.configService.getDexRouterAddress(), 'list_bond_tokens', adminSecret,
       [
         Address.fromString(sellerAddress).toScVal(),
@@ -147,8 +147,9 @@ export class DexService {
     const adminSecret = this.getAdminSecret();
     const nonce = await this.nonceService.next(this.configService.getDexRouterAddress(), buyerAddress);
 
+    let transactionHash: string | undefined;
     try {
-      await this.contractService.invokeContractMethod(
+      ({ transactionHash } = await this.contractService.invokeContractMethod(
         this.configService.getDexRouterAddress(), 'execute_purchase', adminSecret,
         [
           Address.fromString(buyerAddress).toScVal(),
@@ -157,7 +158,7 @@ export class DexService {
           nativeToScVal(BigInt(dto.amount), { type: 'i128' }),
         ],
         nonce,
-      );
+      ));
     } catch (error) {
       throw this.mapDexError(error);
     }

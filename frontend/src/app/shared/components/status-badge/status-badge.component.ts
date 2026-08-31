@@ -15,6 +15,8 @@ const STATUS_COLORS: Record<string, string> = {
   Filled: '#3b82f6',
   Cancelled: '#6b7280',
   Expired: '#ef4444',
+  Confirmed: '#22c55e',
+  Failed: '#ef4444',
 };
 
 @Component({

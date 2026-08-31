@@ -379,10 +379,11 @@ describe('DexService', () => {
       });
       invokeContractMethodMock.mockResolvedValue({ transactionHash: 'tx-buy', successful: true });
 
-      await service.buyBondTokens({ orderId: 3, amount: 10, maxPrice: 10 } as any, SELLER);
+      const order = await service.buyBondTokens({ orderId: 3, amount: 10, maxPrice: 10 } as any, SELLER);
 
       expect(redis.delPattern).toHaveBeenCalledWith('orders:*');
       expect(redis.del).toHaveBeenCalledWith('order:3');
+      expect(order.transactionHash).toBe('tx-buy');
     });
 
     it('cancelOrder calls delPattern("orders:*") and del("order:<id>")', async () => {

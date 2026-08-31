@@ -28,6 +28,9 @@ export interface BondResponse {
   totalSubscribed: string;
   status: BondStatusEnum;
   createdAt: string;
+  /** Only present on the response to a just-submitted issuance (see
+   *  BondsService.create); absent on reads. */
+  transactionHash?: string;
 }
 
 export interface HeldBondResponse extends BondResponse {

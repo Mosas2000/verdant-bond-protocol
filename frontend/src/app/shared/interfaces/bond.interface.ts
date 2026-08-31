@@ -10,6 +10,8 @@ export interface Bond {
   totalSubscribed: string;
   status: 'Active' | 'Matured' | 'Defaulted';
   createdAt: string;
+  /** Only present on the response to a just-submitted issuance; absent on reads. */
+  transactionHash?: string;
 }
 
 export interface CreateBondDto {
@@ -42,6 +44,8 @@ export interface Project {
   totalAreaHa: number;
   carbonSequestrationEstimate: number;
   createdAt: string;
+  /** Only present on the response to a just-submitted registration; absent on reads. */
+  transactionHash?: string;
 }
 
 export interface ProjectProvenanceEvent {
@@ -167,4 +171,12 @@ export interface WithdrawQuoteDto {
   asset: QuoteAsset;
   amount: number;
   nonce?: number;
+}
+
+// Mirrors api/src/stellar/contract.service.ts's TransactionStatus/TransactionStatusResult.
+export type TransactionStatus = 'pending' | 'confirmed' | 'failed';
+
+export interface TransactionStatusResponse {
+  hash: string;
+  status: TransactionStatus;
 }

@@ -155,6 +155,9 @@ export const ORDERS_POLL_INTERVAL_MS = 15000;
                                   <button class="btn btn-sm btn-primary" (click)="onBuy(order)" [disabled]="actionPending() || !canConfirm(order)">Confirm</button>
                                   <button class="btn btn-sm btn-outline" (click)="cancelBuy()">Cancel</button>
                                 </div>
+                                @if (!authService.sessionReady()) {
+                                  <span class="auth-hint">Connect your wallet and sign in to buy.</span>
+                                }
                                 @if (buyError()) {
                                   <div class="error-msg">{{ buyError() }}</div>
                                 }
@@ -267,6 +270,7 @@ export const ORDERS_POLL_INTERVAL_MS = 15000;
     .sufficient-msg { color: #22c55e; }
     .insufficient-msg { color: #ef4444; }
     .error-msg { font-size: 0.75rem; color: #ef4444; }
+    .auth-hint { font-size: 0.75rem; color: #92400e; background: #fffbeb; padding: 4px 8px; border-radius: 6px; }
   `],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
@@ -276,6 +280,7 @@ export class MarketplaceListComponent implements OnInit, OnDestroy {
   private readonly router = inject(Router);
   readonly authService = inject(AuthService);
   readonly walletService = inject(WalletService);
+  private readonly pendingTx = inject(PendingTransactionsService);
 
   readonly orders = signal<Order[]>([]);
   readonly bonds = signal<Bond[]>([]);

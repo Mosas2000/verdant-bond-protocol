@@ -75,6 +75,9 @@ export class AuthComponent {
   readonly authService = inject(AuthService);
 
   error = '';
+  /** True when this page was reached via walletAuthGuard's redirect
+   *  (i.e. there's a returnUrl other than the default). */
+  readonly redirected = this.route.snapshot.queryParamMap.has('returnUrl');
 
   /** Route the guard bounced the visitor away from, if any (issue #168). */
   private readonly returnUrl = signal(

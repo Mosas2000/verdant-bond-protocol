@@ -7,6 +7,12 @@ import { AdminIntentService } from '../../shared/services/admin-intent.service';
 import { AdminSecretPromptComponent } from '../../shared/components/admin-secret-prompt/admin-secret-prompt.component';
 import { CreateBondDto } from '../../shared/interfaces/bond.interface';
 import { appErrorMessage } from '../../shared/errors/api-error';
+import { PendingTransactionsService } from '../../shared/services/pending-transactions.service';
+import {
+  couponScheduleGroupValidator,
+  parseCouponSchedule,
+  toEpochSeconds,
+} from '../../shared/validators/coupon-schedule.validators';
 
 @Component({
   selector: 'app-issue-bond',
@@ -91,8 +97,20 @@ import { appErrorMessage } from '../../shared/errors/api-error';
         <div class="form-group">
           <label class="form-label" for="couponSchedule">Coupon Schedule</label>
           <input id="couponSchedule" class="form-input" formControlName="couponSchedule" placeholder="Comma-separated epoch seconds, e.g. 1750000000, 1781536000" />
-          @if (form.get('couponSchedule')?.invalid && form.get('couponSchedule')?.touched) {
+          @if (form.get('couponSchedule')?.hasError('required') && form.get('couponSchedule')?.touched) {
             <span class="form-error">Enter at least one coupon date</span>
+          }
+          @if (form.errors?.['couponEmpty'] && form.get('couponSchedule')?.touched) {
+            <span class="form-error">Enter at least one valid coupon date</span>
+          }
+          @if (form.errors?.['couponPast'] && form.get('couponSchedule')?.touched) {
+            <span class="form-error">All coupon dates must be in the future</span>
+          }
+          @if (form.errors?.['couponUnordered'] && form.get('couponSchedule')?.touched) {
+            <span class="form-error">Coupon dates must be strictly ascending with no duplicates</span>
+          }
+          @if (form.errors?.['couponAfterMaturity'] && form.get('couponSchedule')?.touched) {
+            <span class="form-error">All coupon dates must be before the maturity date</span>
           }
         </div>
 
@@ -153,14 +171,17 @@ export class IssueBondComponent {
   readonly success = signal(false);
   readonly secretPromptOpen = signal(false);
 
-  form: FormGroup = this.fb.group({
-    projectId: ['', Validators.required],
-    faceValue: [null, [Validators.required, Validators.min(1)]],
-    creditType: ['Carbon', Validators.required],
-    totalSupply: [1000, [Validators.required, Validators.min(1)]],
-    maturityDate: ['', Validators.required],
-    couponSchedule: ['', Validators.required],
-  });
+  form: FormGroup = this.fb.group(
+    {
+      projectId: ['', Validators.required],
+      faceValue: [null, [Validators.required, Validators.min(1)]],
+      creditType: ['Carbon', Validators.required],
+      totalSupply: [1000, [Validators.required, Validators.min(1)]],
+      maturityDate: ['', Validators.required],
+      couponSchedule: ['', Validators.required],
+    },
+    { validators: couponScheduleGroupValidator() },
+  );
 
   onSubmit(): void {
     if (this.form.invalid || this.submitting()) return;
