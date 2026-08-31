@@ -494,21 +494,25 @@ async registerProvider(dto: RegisterProviderDto): Promise<ProviderResponse> {
     return undefined;
   }
 
-  private decodeReport(data: any[]): ReportResponse {
+  private decodeReport(data: any): ReportResponse {
+    const verifiedAtNum = Number(this.field(data, 'verified_at', 10));
+    const stake = this.field(data, 'provider_stake_at_verification', 11);
+    
     return {
-      id: Number(data[0]),
-      providerAddress: data[1] as string,
-      projectId: Buffer.from(data[2] as Uint8Array).toString('hex'),
-      periodStart: Number(data[3]),
-      periodEnd: Number(data[4]),
-      carbonSequestered: toBigIntString(data[5]),
-      methodology: data[6] as string,
-      ipfsHash: Buffer.from(data[7] as Uint8Array).toString('hex'),
-      status: this.reportStatusFromIndex(Number(data[8])),
-      createdAt: new Date(Number(data[9]) * 1000).toISOString(),
-      verifiedAt: Number(data[10]) > 0
-        ? new Date(Number(data[10]) * 1000).toISOString()
+      id: Number(this.field(data, 'id', 0)),
+      providerAddress: this.field(data, 'provider', 1) as string,
+      projectId: Buffer.from(this.field(data, 'project_id', 2) as Uint8Array).toString('hex'),
+      periodStart: Number(this.field(data, 'period_start', 3)),
+      periodEnd: Number(this.field(data, 'period_end', 4)),
+      carbonSequestered: toBigIntString(this.field(data, 'carbon_sequestered', 5)),
+      methodology: this.field(data, 'methodology', 6) as string,
+      ipfsHash: Buffer.from(this.field(data, 'ipfs_evidence_hash', 7) as Uint8Array).toString('hex'),
+      status: this.reportStatusFromIndex(Number(this.field(data, 'status', 8))),
+      createdAt: new Date(Number(this.field(data, 'submitted_at', 9)) * 1000).toISOString(),
+      verifiedAt: verifiedAtNum > 0
+        ? new Date(verifiedAtNum * 1000).toISOString()
         : undefined,
+      providerStakeAtVerification: stake != null ? toBigIntString(stake) : undefined,
     };
   }
 

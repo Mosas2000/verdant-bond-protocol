@@ -337,6 +337,7 @@ export class DexService {
       quoteAsset: data[5] as QuoteAsset,
       status: this.deriveEffectiveStatus(rawStatus, expiresAtSeconds),
       createdAt: new Date(Number(data[7]) * 1000).toISOString(),
+      expiresAt: new Date(expiresAtSeconds * 1000).toISOString(),
     };
   }
 

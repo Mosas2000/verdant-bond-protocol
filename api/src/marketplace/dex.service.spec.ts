@@ -152,6 +152,29 @@ describe('DexService', () => {
         expect.objectContaining({ method: 'order_count' }),
       );
     });
+
+    it('filters orders by status explicitly', async () => {
+      simulateCallMock.mockImplementation(({ method, args }: { method: string; args: any[] }) => {
+        if (method === 'order_count') {
+          return Promise.resolve(nativeToScVal(BigInt(4), { type: 'u64' }));
+        }
+        const id = Number(scValToNative(args[0]));
+        // Make id 2 be Expired by setting expiresAt in the past
+        const pastExpiry = BigInt(Math.floor(Date.now() / 1000) - 100);
+        if (id === 2) {
+          const raw = rawOrder(id);
+          // Set expiry at index 8
+          raw.value()[8] = nativeToScVal(pastExpiry, { type: 'u64' });
+          return Promise.resolve(raw);
+        }
+        return Promise.resolve(rawOrder(id));
+      });
+
+      const result = await service.listOrders(undefined, 'Expired', 1, 10);
+
+      expect(result.data.map((order) => order.id)).toEqual([2]);
+      expect(result.meta.total).toBe(1);
+    });
   });
 
   describe('decodeOrder', () => {

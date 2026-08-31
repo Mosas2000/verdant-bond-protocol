@@ -17,6 +17,7 @@ export interface ReportResponse {
   status: ReportStatus;
   createdAt: string;
   verifiedAt?: string;
+  providerStakeAtVerification?: string;
 }
 
 export interface ChallengeResponse {

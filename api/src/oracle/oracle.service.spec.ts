@@ -102,6 +102,7 @@ describe('OracleService', () => {
         status: ReportStatus.Verified,
         createdAt: new Date(1700001000 * 1000).toISOString(),
         verifiedAt: undefined,
+        providerStakeAtVerification: undefined,
       });
     });
 
