@@ -439,10 +439,6 @@ export class DexService {
   }
 
   private mapDexError(error: unknown): Error {
-    if (error instanceof HttpException) {
-      return error;
-    }
-
     if (error instanceof ContractException) {
       const code = error.rawErrorCode as number | undefined;
       if (code === DEX_ERROR_CODE.InsufficientFunds) {

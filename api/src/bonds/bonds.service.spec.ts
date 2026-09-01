@@ -26,6 +26,7 @@ import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { ConfigService } from '../config/config.service';
 import { BondStatusEnum, BondMaturityStatusEnum, CreditTypeEnum } from './interfaces/bond.interface';
+import { HolderIndexService } from './holder-index.service';
 
 // The holder index is exercised by its own dedicated spec; here we mock it so
 // BondsService resolves cleanly and coupon distribution falls back to a known

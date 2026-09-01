@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
+import { Keypair, nativeToScVal } from '@stellar/stellar-sdk';
 import { BondsService } from './bonds.service';
 import { OracleService } from '../oracle/oracle.service';
 import { ContractService } from '../stellar/contract.service';
@@ -46,6 +47,10 @@ function bondsModuleWith(oracleService?: any) {
     {
       provide: ConfigService,
       useValue: { getCouponEngineAddress: jest.fn().mockReturnValue('C'), getBondIssuerAddress: jest.fn().mockReturnValue('B') },
+    },
+    {
+      provide: HolderIndexService,
+      useValue: { getHoldersForCoupon: jest.fn().mockResolvedValue([]), getHoldersWithBalances: jest.fn().mockResolvedValue([]) },
     },
   ];
   if (oracleService) {

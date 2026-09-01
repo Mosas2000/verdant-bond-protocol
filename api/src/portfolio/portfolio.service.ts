@@ -78,7 +78,9 @@ export class PortfolioService {
         createdAt: o.createdAt,
       }));
 
-    const claimableCredits: PortfolioClaimableCredit[] = claimable;
+    const claimableCredits: PortfolioClaimableCredit[] = claimable.filter(
+      (c: PortfolioClaimableCredit) => BigInt(c.amount) > 0n,
+    );
     const retiredCredits = retired as PortfolioRetiredCredit[];
 
     const pendingActions: PortfolioPendingAction[] = [];

@@ -55,6 +55,21 @@ pub struct BondConfig {
     pub total_supply: i128,
 }
 
+/// Aggregated redemption funding view for a bond (Issue #150).
+///
+/// - `total_principal_due` is the total outstanding subscribed principal,
+///   which is what holders are owed at face value on redemption.
+/// - `funded_amount` is the escrowed redemption pool.
+/// - `shortfall` is `total_principal_due - funded_amount`, saturated at zero.
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub struct RedemptionCoverage {
+    pub total_principal_due: i128,
+    pub funded_amount: i128,
+    pub shortfall: i128,
+    pub coverage_fraction_bps: u64,
+}
+
 pub type BondId = u64;
 pub type ReportId = u64;
 pub type OrderId = u64;

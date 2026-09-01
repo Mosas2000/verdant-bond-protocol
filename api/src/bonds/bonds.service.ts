@@ -23,6 +23,7 @@ import {
   TransferResponse,
   UndistributedTotalResponse,
   SweepUndistributedResponse,
+  BondDetailResponse,
   BondStatusEnum,
   BondMaturityStatusEnum,
   CreditTypeEnum,

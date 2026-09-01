@@ -3,7 +3,7 @@ import { ContractService } from '../stellar/contract.service';
 import { RedisService } from '../common/services/redis.service';
 import { ConfigService } from '../config/config.service';
 import { ConflictException } from '@nestjs/common';
-import { nativeToScVal, scValToNative } from '@stellar/stellar-sdk';
+import { nativeToScVal, scValToNative, Keypair } from '@stellar/stellar-sdk';
 
 // Force the in-memory durable store regardless of the test environment.
 process.env.NODE_ENV = 'test';

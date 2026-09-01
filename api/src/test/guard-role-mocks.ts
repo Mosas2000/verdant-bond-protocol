@@ -9,6 +9,8 @@ import { CanActivate, ExecutionContext, UnauthorizedException, ForbiddenExceptio
  *   - AdminGuard     : allows only `admin` (throws UnauthorizedException, like the real one).
  *   - KycGuard       : allows only `verified` (throws ForbiddenException for everyone else).
  *   - ProviderGuard  : allows only `provider` (throws UnauthorizedException).
+ *   - IntentGuard    : allow-all (intent verification is covered separately by
+ *                      `intent.service.spec.ts`, not the behavioural role specs).
  *
  * The real guards remain covered by `route-authorization.matrix.spec.ts` (which
  * asserts they are actually wired) and `guard-roles.spec.ts` (unit behaviour).

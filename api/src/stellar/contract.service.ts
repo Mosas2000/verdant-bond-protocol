@@ -182,7 +182,7 @@ export class ContractService {
       const response = await this.sorobanRpc.sendTransaction(preparedTransaction);
 
       if (response.status === 'ERROR') {
-        let code: number | undefined = undefined;
+        const code: number | undefined = undefined;
         let errMsg = `Contract transaction submission failed with status ERROR`;
         if (response.errorResult) {
           errMsg += `: ${response.errorResult.toXDR('base64')}`;

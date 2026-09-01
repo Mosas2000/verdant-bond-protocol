@@ -24,7 +24,7 @@ import { nativeToScVal, scValToNative, Address, xdr } from '@stellar/stellar-sdk
 import { StellarService } from '../stellar/stellar.service';
 import { toBigIntString, encodeCid } from '../common/utils';
 import { ConfigService } from '../config/config.service';
-import { verifyManifest, verifyManifestMatchesReport } from '../../../oracle/manifest';
+import { verifyManifest, verifyManifestMatchesReport } from './manifest-verification';
 
 
 

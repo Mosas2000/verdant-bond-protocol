@@ -3,6 +3,7 @@ import * as request from 'supertest';
 import { MarketplaceController } from './marketplace.controller';
 import { DexService } from './dex.service';
 import { LiquidityService } from './liquidity.service';
+import { DexReconciliationService } from './dex.reconciliation.service';
 import { StellarService } from '../stellar/stellar.service';
 import { buildControllerApp } from '../test/controller-guard.harness';
 import { autoMock, TestRole } from '../test/guard-role-mocks';
@@ -27,6 +28,7 @@ describe('MarketplaceController authorization (wallet-header model)', () => {
     app = await buildControllerApp(MarketplaceController, [
       { provide: DexService, useValue: mockDexService },
       { provide: LiquidityService, useValue: mockLiquidityService },
+      { provide: DexReconciliationService, useValue: autoMock(DexReconciliationService) },
       { provide: StellarService, useValue: mockStellarService },
     ]);
     dexService = app.get(DexService) as jest.Mocked<DexService>;

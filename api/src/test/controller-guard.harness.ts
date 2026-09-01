@@ -8,7 +8,7 @@ import { IntentGuard } from '../common/guards/intent.guard';
 import { fakeJwtAuthGuard, fakeAdminGuard, fakeKycGuard, fakeProviderGuard, fakeIntentGuard } from './guard-role-mocks';
 
 /**
- * Boots a single controller with all four auth guards replaced by header-driven
+ * Boots a single controller with all auth guards replaced by header-driven
  * fakes so behavioural role tests can run without a database or passport. The
  * real guard wiring is still asserted by `route-authorization.matrix.spec.ts`.
  */

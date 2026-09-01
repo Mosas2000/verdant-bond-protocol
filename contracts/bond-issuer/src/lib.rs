@@ -1,6 +1,6 @@
 #![no_std]
 #![allow(deprecated)]
-use nbbs_shared::{BondConfig, BondError, BondStatus};
+use nbbs_shared::{BondConfig, BondError, BondStatus, CreditType, RedemptionCoverage};
 use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, Env, IntoVal, Symbol};
 
 pub const MAX_SUPPLY: i128 = 1_000_000_000_000_000_000;
@@ -51,6 +51,40 @@ fn consume_nonce(env: &Env, addr: &Address, nonce: u64) -> Result<(), BondError>
         .persistent()
         .set(&DataKey::Nonce(addr.clone()), &(expected_nonce + 1));
     Ok(())
+}
+
+/// Classifies a methodology symbol against a credit type (Issue #146).
+///
+/// Methodologies are free-form symbols in the wider ecosystem
+/// ("VCS", "verra_vcs", "GS", "blue_carbon", "BLUE-CARBON", ...), so rather
+/// than an exact-enum string set that would drift from registry values, we
+/// treat Carbon as the broad default and only gate the specialised credit
+/// types (BlueCarbon, Biodiversity) on an explicit marker in the methodology.
+/// This keeps issuance permissive for carbon-heavy registries while still
+/// rejecting clearly incompatible pairings and is therefore robust to the
+/// case/underscore variance already present in fixtures.
+fn methodology_compatible(env: &Env, methodology: &Symbol, credit_type: &CreditType) -> bool {
+    use CreditType::*;
+    let blue = [
+        Symbol::new(env, "blue_carbon"),
+        Symbol::new(env, "BLUE_CARBON"),
+        Symbol::new(env, "BLUE"),
+    ];
+    let biodiv = [
+        Symbol::new(env, "biodiversity"),
+        Symbol::new(env, "BIODIVERSITY"),
+        Symbol::new(env, "biodiv"),
+    ];
+    let is_blue = blue.contains(methodology);
+    let is_biodiv = biodiv.contains(methodology);
+    match credit_type {
+        Carbon => !is_blue && !is_biodiv,
+        BlueCarbon => is_blue,
+        Biodiversity => is_biodiv,
+        // A basket bundle is intentionally multi-asset and accepts any backing
+        // methodology; downstream coupon distribution resolves per-report.
+        Basket => true,
+    }
 }
 
 #[contract]
@@ -146,6 +180,19 @@ impl BondIssuer {
             );
             if !approved {
                 return Err(BondError::ProjectNotApproved);
+            }
+
+            // Issue #146: the backing project's methodology must be compatible
+            // with the bond's coupon credit denomination. Cross-invoke the
+            // registry to fetch the methodology and compare against the agreed
+            // methodology -> credit-type matrix.
+            let methodology: Symbol = env.invoke_contract(
+                &registry,
+                &Symbol::new(&env, "get_project_methodology"),
+                vec![&env, config.project_id.clone().into_val(&env)],
+            );
+            if !methodology_compatible(&env, &methodology, &config.credit_type) {
+                return Err(BondError::IncompatibleMethodologyCreditType);
             }
         }
 
@@ -371,7 +418,7 @@ impl BondIssuer {
         let pool_key = DataKey::RedemptionPool(bond_id);
         let pool: i128 = env.storage().persistent().get(&pool_key).unwrap_or(0);
         if pool < payout {
-            return Err(BondError::InsufficientSupply);
+            return Err(BondError::RedemptionUnderfunded);
         }
         env.storage().persistent().set(&pool_key, &(pool - payout));
 
@@ -422,6 +469,68 @@ impl BondIssuer {
             .persistent()
             .get(&DataKey::RedemptionPool(bond_id))
             .unwrap_or(0)
+    }
+
+    /// Per-holder unpaid principal liability before/at redemption (Issue #150):
+    /// the holder's outstanding subscription balance scaled by face value.
+    pub fn holder_redemption_liability(env: Env, bond_id: u64, holder: Address) -> i128 {
+        let balance: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::HolderBalance(bond_id, holder.clone()))
+            .unwrap_or(0);
+        if balance == 0 {
+            return 0;
+        }
+        let config: BondConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::BondConfig(bond_id))
+            .unwrap();
+        balance.saturating_mul(config.face_value)
+    }
+
+    /// Aggregate redemption funding coverage for a bond (Issue #150): total
+    /// principal due across all holders, funded amount, and shortfall.
+    pub fn redemption_coverage(env: Env, bond_id: u64) -> Result<RedemptionCoverage, BondError> {
+        let config: BondConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::BondConfig(bond_id))
+            .ok_or(BondError::BondNotFound)?;
+        let state: BondState = env
+            .storage()
+            .instance()
+            .get(&DataKey::BondState(bond_id))
+            .ok_or(BondError::BondNotFound)?;
+
+        let total_principal_due = state
+            .total_subscribed
+            .checked_mul(config.face_value)
+            .ok_or(BondError::Overflow)?;
+        let funded_amount = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RedemptionPool(bond_id))
+            .unwrap_or(0);
+        let shortfall = if total_principal_due > funded_amount {
+            total_principal_due - funded_amount
+        } else {
+            0
+        };
+        let coverage_fraction_bps = if total_principal_due == 0 {
+            10000
+        } else {
+            let numerator = (funded_amount as u128).saturating_mul(10000);
+            (numerator / total_principal_due as u128).min(10000) as u64
+        };
+
+        Ok(RedemptionCoverage {
+            total_principal_due,
+            funded_amount,
+            shortfall,
+            coverage_fraction_bps,
+        })
     }
 
     pub fn get_nonce(env: Env, address: Address) -> u64 {
@@ -587,7 +696,7 @@ mod test {
         let mut zero = make_config(&env);
         zero.total_supply = 0;
         assert_eq!(
-            client.try_issue_bond(&admin, &zero, &2),
+            client.try_issue_bond(&admin, &zero, &1),
             Err(Ok(BondError::InvalidSupply))
         );
     }
@@ -751,9 +860,74 @@ mod test {
         client.fund_redemption(&admin, &bond_id, &999_999, &2);
 
         let result = client.try_redeem(&user, &bond_id, &1000, &1);
-        assert_eq!(result, Err(Ok(BondError::InsufficientSupply)));
+        assert_eq!(result, Err(Ok(BondError::RedemptionUnderfunded)));
         assert_eq!(client.get_holder_balance(&bond_id, &user), 1000);
         assert_eq!(client.get_redemption_pool(&bond_id), 999_999);
+    }
+
+    #[test]
+    fn test_redemption_coverage_partial_shortfall() {
+        let (env, client, admin, user) = setup();
+        let config = make_config(&env); // face_value 1000
+        let bond_id = client.issue_bond(&admin, &config, &0);
+
+        client.subscribe(&user, &bond_id, &3000, &0); // liability = 3_000_000
+        client.fund_redemption(&admin, &bond_id, &1_000_000, &1);
+
+        let cov = client.redemption_coverage(&bond_id);
+        assert_eq!(cov.total_principal_due, 3_000_000);
+        assert_eq!(cov.funded_amount, 1_000_000);
+        assert_eq!(cov.shortfall, 2_000_000);
+        // 1_000_000 / 3_000_000 = 33.33% -> 3333 bps
+        assert_eq!(cov.coverage_fraction_bps, 3333);
+
+        assert_eq!(
+            client.holder_redemption_liability(&bond_id, &user),
+            3_000_000
+        );
+    }
+
+    #[test]
+    fn test_redemption_coverage_fully_funded() {
+        let (env, client, admin, user) = setup();
+        let config = make_config(&env);
+        let bond_id = client.issue_bond(&admin, &config, &0);
+
+        client.subscribe(&user, &bond_id, &3000, &0);
+        client.fund_redemption(&admin, &bond_id, &3_000_000, &1);
+
+        let cov = client.redemption_coverage(&bond_id);
+        assert_eq!(cov.funded_amount, 3_000_000);
+        assert_eq!(cov.shortfall, 0);
+        assert_eq!(cov.coverage_fraction_bps, 10000);
+    }
+
+    #[test]
+    fn test_redemption_coverage_overfunded_saturates() {
+        let (env, client, admin, user) = setup();
+        let config = make_config(&env);
+        let bond_id = client.issue_bond(&admin, &config, &0);
+
+        client.subscribe(&user, &bond_id, &1000, &0);
+        client.fund_redemption(&admin, &bond_id, &5_000_000, &1);
+
+        let cov = client.redemption_coverage(&bond_id);
+        assert_eq!(cov.total_principal_due, 1_000_000);
+        assert_eq!(cov.funded_amount, 5_000_000);
+        assert_eq!(cov.shortfall, 0);
+        assert_eq!(cov.coverage_fraction_bps, 10000);
+    }
+
+    #[test]
+    fn test_redemption_coverage_no_subscriptions_is_full() {
+        let (env, client, admin, _user) = setup();
+        let config = make_config(&env);
+        let bond_id = client.issue_bond(&admin, &config, &0);
+
+        let cov = client.redemption_coverage(&bond_id);
+        assert_eq!(cov.total_principal_due, 0);
+        assert_eq!(cov.shortfall, 0);
+        assert_eq!(cov.coverage_fraction_bps, 10000);
     }
 
     #[test]
@@ -1046,7 +1220,6 @@ mod test {
                     } else {
                         let res =
                             client.try_transfer(&users[from], &users[to], &bond_id, &amount, &nonces[from]);
-                        nonces[from] += 1;
                         prop_assert_eq!(res, Err(Ok(BondError::InsufficientSupply)));
                     }
                     let sum: i128 = balances.iter().sum();
@@ -1128,7 +1301,7 @@ mod test {
                 prop_assert_eq!(res, Err(Ok(BondError::BondAlreadyMatured)));
                 let res = client.try_transfer(&users[0], &users[1], &bond_id, &1, &nonces[0]);
                 prop_assert_eq!(res, Err(Ok(BondError::BondAlreadyMatured)));
-                let res = client.try_mature_bond(&admin, &bond_id, &2);
+                let res = client.try_mature_bond(&admin, &bond_id, &3);
                 prop_assert_eq!(res, Err(Ok(BondError::BondAlreadyMatured)));
 
                 let amount = balances[0].min(supply);

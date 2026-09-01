@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { BondsService } from './bonds.service';
+import { HolderIndexService } from './holder-index.service';
 import { ContractService } from '../stellar/contract.service';
 import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
@@ -16,6 +17,7 @@ const dummyBond: BondResponse = {
   couponSchedule: ['10', '20'],
   creditType: CreditTypeEnum.Carbon,
   maturityDate: Math.floor(Date.now() / 1000) + 1000,
+  maturityStatus: BondMaturityStatusEnum.Active,
   totalSupply: '1000',
   totalSubscribed: '400',
   status: BondStatusEnum.Active,
@@ -42,6 +44,10 @@ function buildModule() {
         provide: ConfigService,
         useValue: { getBondIssuerAddress: jest.fn().mockReturnValue('C'), getCouponEngineAddress: jest.fn().mockReturnValue('E') },
       },
+      {
+        provide: HolderIndexService,
+        useValue: { addHolder: jest.fn(), removeHolder: jest.fn(), getHolders: jest.fn().mockResolvedValue([]) },
+      },
     ],
   }).compile();
 }
@@ -49,7 +55,7 @@ function buildModule() {
 describe('BondsService.getBondDetail (issue #4 refresh model)', () => {
   it('returns an atomic snapshot of bond, holders, coupon, and maturity with a server timestamp', async () => {
     const moduleRef = await buildModule();
-    const svc = moduleRef.get(BondsService);
+    const svc = moduleRef.get(BondsService) as any;
 
     const bondSpy = jest.spyOn(svc as any, 'buildBondResponse').mockResolvedValue(dummyBond);
     const holdersSpy = jest.spyOn(svc, 'getHolders').mockResolvedValue({ bondId: 7, holders: dummyHolders, total: dummyHolders.length });
@@ -71,7 +77,7 @@ describe('BondsService.getBondDetail (issue #4 refresh model)', () => {
 
   it('marks maturity reached when the bond status is Matured', async () => {
     const moduleRef = await buildModule();
-    const svc = moduleRef.get(BondsService);
+    const svc = moduleRef.get(BondsService) as any;
 
     jest.spyOn(svc as any, 'buildBondResponse').mockResolvedValue({ ...dummyBond, status: BondStatusEnum.Matured });
     jest.spyOn(svc, 'getHolders').mockResolvedValue({ bondId: 7, holders: [], total: 0 });
@@ -84,7 +90,7 @@ describe('BondsService.getBondDetail (issue #4 refresh model)', () => {
 
   it('refreshes consistently after a mutation: a second call re-reads the source of truth', async () => {
     const moduleRef = await buildModule();
-    const svc = moduleRef.get(BondsService);
+    const svc = moduleRef.get(BondsService) as any;
 
     const bondSpy = jest.spyOn(svc as any, 'buildBondResponse').mockResolvedValue(dummyBond);
     const holdersSpy = jest.spyOn(svc, 'getHolders').mockResolvedValue({ bondId: 7, holders: [], total: 0 });

@@ -15,6 +15,8 @@ pub enum BondError {
     ReportNotVerified = 10,
     InvalidReport = 11,
     InvalidSupply = 12,
+    RedemptionUnderfunded = 13,
+    IncompatibleMethodologyCreditType = 14,
 }
 
 #[derive(Clone, Debug, PartialEq)]
