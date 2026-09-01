@@ -556,6 +556,37 @@ impl CouponEngine {
 
         Ok(total)
     }
+
+    pub fn set_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+        nonce: u64,
+    ) -> Result<(), BondError> {
+        current_admin.require_auth();
+
+        let expected_nonce = get_nonce(&env, &current_admin);
+        if nonce != expected_nonce {
+            return Err(BondError::InvalidNonce);
+        }
+        set_nonce(&env, &current_admin, expected_nonce + 1);
+
+        require_admin(&env, &current_admin)?;
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.events().publish(
+            (Symbol::new(&env, "admin_changed"),),
+            (current_admin, new_admin),
+        );
+
+        Ok(())
+    }
+
+    pub fn get_admin(env: Env) -> Result<Address, BondError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(BondError::NotInitialized)
+    }
 }
 
 fn require_admin(env: &Env, caller: &Address) -> Result<(), BondError> {

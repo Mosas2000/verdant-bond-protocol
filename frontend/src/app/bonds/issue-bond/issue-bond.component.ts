@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { RouterModule, Router } from '@angular/router';
 import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ApiService } from '../../shared/services/api.service';
+import { appErrorMessage } from '../../shared/errors/api-error';
 
 @Component({
   selector: 'app-issue-bond',
@@ -145,7 +146,7 @@ export class IssueBondComponent {
         setTimeout(() => this.router.navigate(['/bonds']), 1500);
       },
       error: (err) => {
-        this.error.set(err.error?.detail || err.message || 'Failed to issue bond');
+        this.error.set(appErrorMessage(err, 'Failed to issue bond'));
         this.submitting.set(false);
       },
     });

@@ -1,7 +1,9 @@
-import { Component, inject, OnInit, ChangeDetectionStrategy, signal, computed } from '@angular/core';
+import { Component, inject, OnInit, OnDestroy, ChangeDetectionStrategy, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterModule, ActivatedRoute, Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
+import { HttpErrorResponse } from '@angular/common/http';
+import { Subject, EMPTY, Observable, defer, timer, switchMap, takeUntil, retry, tap, finalize, catchError, throwError } from 'rxjs';
 import { ApiService } from '../../shared/services/api.service';
 import { AuthService } from '../../auth/auth.service';
 import { WalletService } from '../../auth/wallet.service';
@@ -9,6 +11,7 @@ import { StatusBadgeComponent } from '../../shared/components/status-badge/statu
 import { LoadingSpinnerComponent } from '../../shared/components/loading-spinner/loading-spinner.component';
 import { QuoteBalanceComponent, QuoteBalances } from '../../shared/components/quote-balance/quote-balance.component';
 import { Order, Bond, QuoteAsset } from '../../shared/interfaces/bond.interface';
+import { appErrorMessage } from '../../shared/errors/api-error';
 
 @Component({
   selector: 'app-marketplace-list',
@@ -66,6 +69,7 @@ import { Order, Bond, QuoteAsset } from '../../shared/interfaces/bond.interface'
         <div class="orders-section">
           <div class="section-header">
             <h3 class="section-title">Open Orders ({{ orders().length }})</h3>
+            <button class="btn btn-sm btn-outline" (click)="refreshOrders()">Refresh</button>
           </div>
 
           @if (orders().length === 0) {
@@ -224,7 +228,7 @@ import { Order, Bond, QuoteAsset } from '../../shared/interfaces/bond.interface'
   `],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class MarketplaceListComponent implements OnInit {
+export class MarketplaceListComponent implements OnInit, OnDestroy {
   private readonly apiService = inject(ApiService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
@@ -242,6 +246,9 @@ export class MarketplaceListComponent implements OnInit {
   readonly buyError = signal('');
   buyAmount = 0;
   buyMaxPrice = 0;
+
+  private readonly ordersRefresh$ = new Subject<boolean>();
+  private readonly destroy$ = new Subject<void>();
 
   readonly balances = signal<QuoteBalances>({ USDC: 0, XLM: 0 });
   readonly balancesLoaded = signal(false);
@@ -284,8 +291,23 @@ export class MarketplaceListComponent implements OnInit {
     if (bondIdParam) {
       this.filterBondId.set(Number(bondIdParam));
     }
+    this.ordersRefresh$
+      .pipe(
+        takeUntil(this.destroy$),
+        switchMap((forceRefresh) => this.fetchOrders(forceRefresh)),
+      )
+      .subscribe();
     this.loadBonds();
     this.loadOrders();
+  }
+
+  ngOnDestroy(): void {
+    this.destroy$.next();
+    this.destroy$.complete();
+  }
+
+  refreshOrders(): void {
+    this.loadOrders(true);
   }
 
   private loadBonds(): void {
@@ -294,19 +316,39 @@ export class MarketplaceListComponent implements OnInit {
     });
   }
 
-  private loadOrders(): void {
+  private loadOrders(forceRefresh = false): void {
+    this.ordersRefresh$.next(forceRefresh);
+  }
+
+  private fetchOrders(forceRefresh: boolean): Observable<PaginatedResponse<Order>> {
     this.loading.set(true);
     this.error.set('');
-    this.apiService.getOrders(this.filterBondId() ?? undefined).subscribe({
-      next: (res) => {
-        this.orders.set(res.data);
-        this.loading.set(false);
-      },
-      error: () => {
-        this.error.set('Failed to load orders');
-        this.loading.set(false);
-      },
-    });
+    // defer re-invokes the API call on every (re)subscription, so retries issue a
+    // fresh request with a fresh cache-busting param instead of reusing a stale one.
+    return defer(() => this.apiService.getOrders(this.filterBondId() ?? undefined, forceRefresh)).pipe(
+      retry({
+        count: ORDERS_RETRY_COUNT,
+        delay: (error, attempt) =>
+          this.isTransientError(error) ? timer(this.retryDelayMs(attempt)) : throwError(() => error),
+      }),
+      tap({
+        next: (res) => this.orders.set(res.data),
+        error: () => this.error.set('Failed to load orders'),
+      }),
+      finalize(() => this.loading.set(false)),
+      catchError(() => EMPTY),
+    );
+  }
+
+  private retryDelayMs(attempt: number): number {
+    return Math.min(ORDERS_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), ORDERS_RETRY_MAX_DELAY_MS);
+  }
+
+  private isTransientError(error: unknown): boolean {
+    if (error instanceof HttpErrorResponse) {
+      return error.status === 0 || error.status >= 500;
+    }
+    return true;
   }
 
   onFilterChange(bondId: number | null): void {
@@ -381,10 +423,10 @@ export class MarketplaceListComponent implements OnInit {
         this.buyOrderId.set(null);
         this.buySubmitting.set(false);
         this.quotePanel?.loadBalances();
-        this.loadOrders();
+        this.loadOrders(true);
       },
       error: (err) => {
-        this.buyError.set(err.error?.detail || err.message || 'Buy failed');
+        this.buyError.set(appErrorMessage(err, 'Buy failed'));
         this.buySubmitting.set(false);
       },
     });

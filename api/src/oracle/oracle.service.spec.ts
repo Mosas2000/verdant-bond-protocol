@@ -1,5 +1,12 @@
 import { Test } from '@nestjs/testing';
-import { xdr } from '@stellar/stellar-sdk';
+import { BadRequestException, ConflictException } from '@nestjs/common';
+
+jest.mock('@stellar/stellar-sdk', () => {
+  const actual = jest.requireActual('@stellar/stellar-sdk');
+  return { ...actual, scValToNative: jest.fn() };
+});
+
+import { xdr, scValToNative, Keypair } from '@stellar/stellar-sdk';
 import { OracleService } from './oracle.service';
 import { ContractService } from '../stellar/contract.service';
 import { IpfsService } from '../projects/ipfs.service';
@@ -7,24 +14,48 @@ import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
 import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
+import { ConfigService } from '../config/config.service';
 import { ReportStatus } from './interfaces/oracle.interface';
 
 describe('OracleService', () => {
   let service: OracleService;
+  let contractService: { simulateCall: jest.Mock; invokeContractMethod: jest.Mock };
+  let redis: { del: jest.Mock };
+  const adminKeypair = Keypair.random();
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    contractService = {
+      simulateCall: jest.fn(),
+      invokeContractMethod: jest.fn().mockResolvedValue({ result: 0 }),
+    };
+    redis = { del: jest.fn().mockResolvedValue(undefined) };
+
     const moduleRef = await Test.createTestingModule({
       providers: [
         OracleService,
-        { provide: ContractService, useValue: {} },
+        { provide: ContractService, useValue: contractService },
         { provide: IpfsService, useValue: {} },
-        { provide: StellarService, useValue: {} },
+        {
+          provide: StellarService,
+          useValue: {
+            getKeypairFromSecret: jest.fn().mockReturnValue({
+              publicKey: () => adminKeypair.publicKey(),
+            }),
+          },
+        },
         {
           provide: NonceService,
           useValue: { next: jest.fn().mockResolvedValue(0) },
         },
-        { provide: RedisService, useValue: {} },
-        { provide: SigningKeyProvider, useValue: {} },
+        { provide: RedisService, useValue: redis },
+        {
+          provide: SigningKeyProvider,
+          useValue: { adminSecret: jest.fn().mockReturnValue('SADMINSECRET') },
+        },
+        {
+          provide: ConfigService,
+          useValue: { getOracleConsumerAddress: jest.fn().mockReturnValue('CORACLE') },
+        },
       ],
     }).compile();
 
@@ -53,11 +84,12 @@ describe('OracleService', () => {
         projectId: 'a1b2'.padEnd(64, '0'),
         periodStart: 1700000000,
         periodEnd: 1700086400,
-        carbonSequestered: 1200,
+        carbonSequestered: '1200',
         methodology: 'VM0003',
         ipfsHash: 'c3d4'.padEnd(64, '0'),
         status: ReportStatus.Verified,
         createdAt: new Date(1700001000 * 1000).toISOString(),
+        verifiedAt: undefined,
       });
     });
 
@@ -112,8 +144,8 @@ describe('OracleService', () => {
 
       expect((service as any).decodeSlashRecord(raw)).toEqual({
         reportId: 7,
-        penalty: 10_000,
-        remainingStake: 90_000,
+        penalty: '10000',
+        remainingStake: '90000',
         timestamp: new Date(1700000000 * 1000).toISOString(),
         activeAfter: true,
       });
@@ -130,8 +162,8 @@ describe('OracleService', () => {
 
       expect((service as any).decodeSlashRecord(raw)).toEqual({
         reportId: 7,
-        penalty: 10_000,
-        remainingStake: 90_000,
+        penalty: '10000',
+        remainingStake: '90000',
         timestamp: new Date(1700000000 * 1000).toISOString(),
         activeAfter: true,
       });
@@ -177,6 +209,76 @@ describe('OracleService', () => {
     it('prefers object keys over array indices', () => {
       expect((service as any).field({ slashes: 4 }, 'slashes', 2)).toBe(4);
       expect((service as any).field([1, 2, 4], 'slashes', 2)).toBe(4);
+    });
+  });
+
+  describe('registerProvider', () => {
+    const providerAddress = Keypair.random().publicKey();
+
+    beforeEach(() => {
+      (scValToNative as jest.Mock).mockReset();
+    });
+
+    it('rejects an unsupported methodology before calling the contract', async () => {
+      await expect(
+        service.registerProvider({ providerAddress, methodology: 'MADE-UP-METHOD' } as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(contractService.invokeContractMethod).not.toHaveBeenCalled();
+    });
+
+    it('normalizes methodology casing against the supported list', async () => {
+      contractService.simulateCall.mockRejectedValueOnce(new Error('not found'));
+
+      const result = await service.registerProvider({
+        providerAddress,
+        methodology: 'verra-vcs',
+      } as any);
+
+      expect(result.methodology).toBe('VERRA-VCS');
+      expect(contractService.invokeContractMethod).toHaveBeenCalled();
+    });
+
+    it('returns a conflict when the provider is already actively registered', async () => {
+      contractService.simulateCall.mockResolvedValueOnce({});
+      (scValToNative as jest.Mock).mockReturnValueOnce([providerAddress, 'VERRA-VCS', 0, true, 0]);
+
+      await expect(
+        service.registerProvider({ providerAddress, methodology: 'VERRA-VCS' } as any),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      expect(contractService.invokeContractMethod).not.toHaveBeenCalled();
+    });
+
+    it('returns a distinct conflict for a previously removed (inactive) provider', async () => {
+      contractService.simulateCall.mockResolvedValueOnce({});
+      (scValToNative as jest.Mock).mockReturnValueOnce([providerAddress, 'VERRA-VCS', 0, false, 0]);
+
+      await expect(
+        service.registerProvider({ providerAddress, methodology: 'VERRA-VCS' } as any),
+      ).rejects.toThrow(/does not support reactivating/);
+
+      expect(contractService.invokeContractMethod).not.toHaveBeenCalled();
+    });
+
+    it('registers successfully and invalidates the provider list cache', async () => {
+      contractService.simulateCall.mockRejectedValueOnce(new Error('not found'));
+
+      const result = await service.registerProvider({
+        providerAddress,
+        methodology: 'BLUE-CARBON',
+      } as any);
+
+      expect(result.providerAddress).toBe(providerAddress);
+      expect(result.active).toBe(true);
+      expect(contractService.invokeContractMethod).toHaveBeenCalledWith(
+        'CORACLE',
+        'register_provider',
+        'SADMINSECRET',
+        expect.any(Array),
+        adminKeypair.publicKey(),
+      );
+      expect(redis.del).toHaveBeenCalledWith('oracle:providers');
     });
   });
 });

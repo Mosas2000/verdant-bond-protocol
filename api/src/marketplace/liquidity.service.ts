@@ -5,8 +5,10 @@ import {
   PriceLevel,
   SlippageResponse,
   OrderStatus,
+  FillabilityStatus,
 } from './interfaces/marketplace.interface';
 import { RedisService } from '../common/services/redis.service';
+import { toBigIntString } from '../common/utils';
 
 @Injectable()
 export class LiquidityService {
@@ -23,30 +25,31 @@ export class LiquidityService {
     const ordersResult = await this.dexService.listOrders(bondId, 'Open', 1, 100);
     const openOrders = ordersResult.data;
 
-    const grouped = new Map<number, { prices: number[]; amounts: number[]; totalVolume: number }>();
+    const grouped = new Map<number, { prices: bigint[]; amounts: bigint[]; totalVolume: bigint }>();
 
     for (const order of openOrders) {
       if (order.status !== OrderStatus.Open) continue;
 
-      const group = grouped.get(order.bondId) || { prices: [], amounts: [], totalVolume: 0 };
-      group.prices.push(order.pricePerToken);
-      group.amounts.push(order.amount);
-      group.totalVolume += order.amount * order.pricePerToken;
+      const group = grouped.get(order.bondId) || { prices: [], amounts: [], totalVolume: BigInt(0) };
+      group.prices.push(BigInt(order.pricePerToken));
+      group.amounts.push(BigInt(order.amount));
+      group.totalVolume += BigInt(order.amount) * BigInt(order.pricePerToken);
       grouped.set(order.bondId, group);
     }
 
     const feeds: PriceFeedResponse[] = [];
 
     for (const [id, group] of grouped) {
-      const bestPrice = Math.min(...group.prices);
-      const averagePrice = group.prices.reduce((a, b) => a + b, 0) / group.prices.length;
+      const bestPrice = group.prices.reduce((a, b) => a < b ? a : b, BigInt(0));
+      const sumPrices = group.prices.reduce((a, b) => a + b, BigInt(0));
+      const averagePrice = group.prices.length > 0 ? sumPrices / BigInt(group.prices.length) : BigInt(0);
 
       feeds.push({
         bondId: id,
-        bestPrice,
-        averagePrice,
+        bestPrice: toBigIntString(bestPrice),
+        averagePrice: toBigIntString(averagePrice),
         totalOrders: group.prices.length,
-        totalVolume: group.totalVolume,
+        totalVolume: toBigIntString(group.totalVolume),
       });
     }
 
@@ -58,18 +61,23 @@ export class LiquidityService {
     const ordersResult = await this.dexService.listOrders(bondId, 'Open', 1, 100);
     const openOrders = ordersResult.data;
 
-    const sorted = [...openOrders].sort((a, b) => a.pricePerToken - b.pricePerToken);
+    const sorted = [...openOrders].sort((a, b) => {
+      const priceA = BigInt(a.pricePerToken);
+      const priceB = BigInt(b.pricePerToken);
+      return priceA < priceB ? -1 : priceA > priceB ? 1 : 0;
+    });
 
     if (sorted.length === 0) {
-      return { price: 0, amount: 0, total: 0 };
+      return { price: '0', amount: '0', total: '0' };
     }
 
     const best = sorted[0];
+    const total = BigInt(best.pricePerToken) * BigInt(best.amount);
 
     return {
       price: best.pricePerToken,
       amount: best.amount,
-      total: best.pricePerToken * best.amount,
+      total: toBigIntString(total),
     };
   }
 
@@ -77,30 +85,54 @@ export class LiquidityService {
     const ordersResult = await this.dexService.listOrders(bondId, 'Open', 1, 100);
     const openOrders = ordersResult.data;
 
-    const sorted = [...openOrders].sort((a, b) => a.pricePerToken - b.pricePerToken);
+    const sorted = [...openOrders].sort((a, b) => {
+      const priceA = BigInt(a.pricePerToken);
+      const priceB = BigInt(b.pricePerToken);
+      return priceA < priceB ? -1 : priceA > priceB ? 1 : 0;
+    });
 
-    let remaining = amount;
-    let totalCost = 0;
-    let totalAmount = 0;
+    let remaining = BigInt(amount);
+    let totalCost = BigInt(0);
+    let totalAmount = BigInt(0);
 
     for (const order of sorted) {
-      if (remaining <= 0) break;
-      const take = Math.min(remaining, order.amount);
-      totalCost += take * order.pricePerToken;
+      if (remaining <= BigInt(0)) break;
+      const orderAmount = BigInt(order.amount);
+      const take = remaining < orderAmount ? remaining : orderAmount;
+      totalCost += take * BigInt(order.pricePerToken);
       totalAmount += take;
       remaining -= take;
     }
 
-    const averagePrice = totalAmount > 0 ? totalCost / totalAmount : 0;
-    const idealCost = amount > 0 ? amount * (sorted[0]?.pricePerToken || 0) : 0;
-    const slippagePercent = idealCost > 0 ? ((totalCost - idealCost) / idealCost) * 100 : 0;
+    const fillableAmount = BigInt(amount) - remaining;
+    const unfilledAmount = remaining;
+    
+    let fillabilityStatus: FillabilityStatus;
+    if (unfilledAmount === BigInt(0)) {
+      fillabilityStatus = 'fully_fillable';
+    } else if (fillableAmount > BigInt(0)) {
+      fillabilityStatus = 'partially_fillable';
+    } else {
+      fillabilityStatus = 'unfillable';
+    }
+
+    const averagePrice = totalAmount > BigInt(0) ? totalCost / totalAmount : BigInt(0);
+    const idealCost = BigInt(amount) > BigInt(0) && sorted.length > 0 
+      ? BigInt(amount) * BigInt(sorted[0].pricePerToken) 
+      : BigInt(0);
+    const slippagePercent = idealCost > BigInt(0) 
+      ? Number(((totalCost - idealCost) * BigInt(100)) / idealCost)
+      : 0;
 
     return {
       bondId,
-      amount,
-      averagePrice,
-      estimatedTotal: totalCost,
+      requestedAmount: toBigIntString(amount),
+      fillableAmount: toBigIntString(fillableAmount),
+      unfilledAmount: toBigIntString(unfilledAmount),
+      averagePrice: toBigIntString(averagePrice),
+      estimatedTotal: toBigIntString(totalCost),
       slippagePercent: Math.max(0, slippagePercent),
+      fillabilityStatus,
     };
   }
 }

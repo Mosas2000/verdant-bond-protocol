@@ -86,6 +86,28 @@ export class RedisService {
     }
   }
 
+  /**
+   * Delete all keys matching a glob pattern.
+   *
+   * Uses SCAN with MATCH to enumerate matching keys without blocking Redis,
+   * then DELs them in a single batched call per cursor page.
+   * Never calls KEYS, which blocks the server on large keyspaces.
+   */
+  async delPattern(pattern: string): Promise<void> {
+    try {
+      let cursor = 0;
+      do {
+        const reply = await this.redis.scan(cursor, { MATCH: pattern, COUNT: 100 });
+        cursor = reply.cursor;
+        if (reply.keys.length > 0) {
+          await this.redis.del(reply.keys);
+        }
+      } while (cursor !== 0);
+    } catch (error) {
+      this.logDegraded('delPattern', pattern, error);
+    }
+  }
+
   async sAdd(key: string, value: string): Promise<void> {
     try {
       await this.redis.sAdd(key, value);

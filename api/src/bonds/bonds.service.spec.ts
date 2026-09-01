@@ -22,6 +22,8 @@ import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
 import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
+import { ConfigService } from '../config/config.service';
+import { BondStatusEnum, BondMaturityStatusEnum, CreditTypeEnum } from './interfaces/bond.interface';
 
 const redisProvider = {
   provide: RedisService,
@@ -42,6 +44,14 @@ const signingProvider = {
   },
 };
 
+const configProvider = {
+  provide: ConfigService,
+  useValue: {
+    getBondIssuerAddress: jest.fn().mockReturnValue('CBOND'),
+    getCouponEngineAddress: jest.fn().mockReturnValue('CCOUPON'),
+  },
+};
+
 describe('BondsService', () => {
   let service: BondsService;
 
@@ -57,6 +67,7 @@ describe('BondsService', () => {
         },
         redisProvider,
         signingProvider,
+        configProvider,
       ],
     }).compile();
 
@@ -118,6 +129,7 @@ describe('BondsService', () => {
           },
           redisProvider,
           signingProvider,
+          configProvider,
         ],
       }).compile();
 
@@ -127,7 +139,7 @@ describe('BondsService', () => {
       const [contractAddress, method, , args] =
         contractService.invokeContractMethod.mock.calls[0];
 
-      expect(contractAddress).toBe('');
+      expect(contractAddress).toBe('CCOUPON');
       expect(method).toBe('distribute_coupon');
       expect(args.length).toBe(5);
       expect(scValToNative(args[0])).toBe(
@@ -156,6 +168,7 @@ describe('BondsService', () => {
           },
           redisProvider,
           signingProvider,
+          configProvider,
         ],
       }).compile();
 
@@ -164,10 +177,54 @@ describe('BondsService', () => {
 
       const [options] = contractService.simulateCall.mock.calls[0];
 
-      expect(options.contractAddress).toBe('');
+      expect(options.contractAddress).toBe('CCOUPON');
       expect(options.method).toBe('get_undistributed_total');
       expect(options.args).toEqual([nativeToScVal(BigInt(3), { type: 'u64' })]);
-      expect(result).toEqual({ bondId: 3, undistributedTotal: 42 });
+      expect(result).toEqual({ bondId: 3, undistributedTotal: '42' });
+    });
+  });
+
+  describe('findHeldByAddress', () => {
+    it('returns only bonds with a positive on-chain balance', async () => {
+      const contractService = {
+        simulateCall: jest.fn()
+          .mockResolvedValueOnce(nativeToScVal(BigInt(2), { type: 'u64' }))
+          .mockResolvedValueOnce(nativeToScVal(BigInt(25), { type: 'i128' }))
+          .mockResolvedValueOnce(nativeToScVal(BigInt(0), { type: 'i128' })),
+      };
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          BondsService,
+          { provide: ContractService, useValue: contractService },
+          { provide: StellarService, useValue: {} },
+          { provide: NonceService, useValue: { next: jest.fn() } },
+          redisProvider,
+          signingProvider,
+          configProvider,
+        ],
+      }).compile();
+      const svc = moduleRef.get(BondsService);
+      jest.spyOn(svc, 'findOne').mockImplementation(async (id) => ({
+        id,
+        projectId: '',
+        faceValue: '0',
+        couponSchedule: [],
+        creditType: CreditTypeEnum.Carbon,
+        maturityDate: 0,
+        maturityStatus: BondMaturityStatusEnum.Active,
+        totalSupply: '0',
+        totalSubscribed: '0',
+        status: BondStatusEnum.Active,
+        createdAt: '',
+      }));
+
+      const result = await svc.findHeldByAddress(
+        'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe(1);
+      expect(result[0].balance).toBe('25');
     });
   });
 
@@ -198,6 +255,7 @@ describe('BondsService', () => {
           },
           redisProvider,
           signingProvider,
+          configProvider,
         ],
       }).compile();
 
@@ -207,7 +265,7 @@ describe('BondsService', () => {
       const [contractAddress, method, callerSecret, args, nonceAddress] =
         contractService.invokeContractMethod.mock.calls[0];
 
-      expect(contractAddress).toBe('');
+      expect(contractAddress).toBe('CCOUPON');
       expect(method).toBe('sweep_undistributed');
       expect(callerSecret).toBe('SADMIN');
       expect(args.length).toBe(2);
@@ -218,7 +276,7 @@ describe('BondsService', () => {
       expect(nonceAddress).toBe(
         'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
       );
-      expect(result).toEqual({ bondId: 3, swept: 42, transactionHash: '0xabc' });
+      expect(result).toEqual({ bondId: 3, swept: '42', transactionHash: '0xabc' });
     });
   });
 
@@ -242,6 +300,7 @@ describe('BondsService', () => {
           },
           redisProvider,
           signingProvider,
+          configProvider,
         ],
       }).compile();
       return moduleRef.get(BondsService);
@@ -322,6 +381,7 @@ describe('BondsService', () => {
           },
           redisProvider,
           signingProvider,
+          configProvider,
         ],
       }).compile();
       return moduleRef.get(BondsService);

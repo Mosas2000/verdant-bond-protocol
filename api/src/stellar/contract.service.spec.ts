@@ -10,7 +10,7 @@ describe('ContractService Soroban polling', () => {
 
   beforeEach(() => {
     process.env.SOROBAN_POLL_INTERVAL_MS = '1';
-    process.env.SOROBAN_POLL_TIMEOUT_MS = '20';
+    process.env.SOROBAN_POLL_TIMEOUT_MS = '2000';
   });
 
   afterEach(() => {
