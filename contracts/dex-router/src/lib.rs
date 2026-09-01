@@ -313,9 +313,7 @@ impl DEXRouter {
 
         // Release escrowed tokens when order is cancelled
         let seller_escrow = get_bond_escrow(&env, order.bond_id, &order.seller);
-        let new_escrow = seller_escrow
-            .checked_sub(order.amount)
-            .unwrap_or(0);
+        let new_escrow = seller_escrow.checked_sub(order.amount).unwrap_or(0);
         set_bond_escrow(&env, order.bond_id, &order.seller, new_escrow);
 
         order.status = OrderStatus::Cancelled;
@@ -648,37 +646,6 @@ impl DEXRouter {
         );
 
         Ok(result)
-    }
-
-    pub fn set_admin(
-        env: Env,
-        current_admin: Address,
-        new_admin: Address,
-        nonce: u64,
-    ) -> Result<(), DEXError> {
-        current_admin.require_auth();
-
-        let expected_nonce = get_nonce(&env, &current_admin);
-        if nonce != expected_nonce {
-            return Err(DEXError::InvalidNonce);
-        }
-        set_nonce(&env, &current_admin, expected_nonce + 1);
-
-        require_admin(&env, &current_admin)?;
-        env.storage().instance().set(&DataKey::Admin, &new_admin);
-        env.events().publish(
-            (Symbol::new(&env, "admin_changed"),),
-            (current_admin, new_admin),
-        );
-
-        Ok(())
-    }
-
-    pub fn get_admin(env: Env) -> Result<Address, DEXError> {
-        env.storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(DEXError::NotInitialized)
     }
 }
 
@@ -1355,8 +1322,11 @@ mod test {
         // Enough balance for many small listings from one seller.
         let order_count: u64 = 40;
         let per_order = 10i128;
-        let (_issuer_admin, issuer_id, bond_id, seller) =
-            setup_bond_and_holder(&env, order_count as i128 * per_order, order_count as i128 * per_order);
+        let (_issuer_admin, issuer_id, bond_id, seller) = setup_bond_and_holder(
+            &env,
+            order_count as i128 * per_order,
+            order_count as i128 * per_order,
+        );
 
         let contract_id = env.register(
             DEXRouter,
@@ -1366,7 +1336,6 @@ mod test {
 
         env.ledger().set_timestamp(1_000_000);
 
-        let mut seller_nonce = 0u64;
         let mut expected_expired = 0u32;
 
         for i in 0..order_count {
@@ -1379,9 +1348,8 @@ mod test {
                 &100i128,
                 &Symbol::new(&env, "USDC"),
                 &ttl,
-                &seller_nonce,
+                &i,
             );
-            seller_nonce += 1;
             if i % 2 == 0 {
                 expected_expired += 1;
             }
@@ -1396,8 +1364,7 @@ mod test {
         let mut passes = 0u32;
 
         loop {
-            let result =
-                client.clean_expired_orders(&admin, &start_id, &batch_size, &admin_nonce);
+            let result = client.clean_expired_orders(&admin, &start_id, &batch_size, &admin_nonce);
             admin_nonce += 1;
             total_cleaned += result.cleaned;
             passes += 1;
@@ -1440,7 +1407,11 @@ mod test {
         let admin = Address::generate(&env);
         let contract_id = env.register(
             DEXRouter,
-            (admin.clone(), Address::generate(&env), Address::generate(&env)),
+            (
+                admin.clone(),
+                Address::generate(&env),
+                Address::generate(&env),
+            ),
         );
         let client = DEXRouterClient::new(&env, &contract_id);
 

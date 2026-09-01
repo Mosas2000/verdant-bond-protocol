@@ -5,8 +5,9 @@ import { AbstractControl, FormBuilder, FormGroup, ReactiveFormsModule, Validatio
 import { ApiService } from '../../shared/services/api.service';
 import { WalletService } from '../../auth/wallet.service';
 import { QuoteBalanceComponent } from '../../shared/components/quote-balance/quote-balance.component';
-import { Bond } from '../../shared/interfaces/bond.interface';
+import { HeldBond } from '../../shared/interfaces/bond.interface';
 import { appErrorMessage } from '../../shared/errors/api-error';
+import { PendingTransactionsService } from '../../shared/services/pending-transactions.service';
 
 @Component({
   selector: 'app-marketplace-sell',
@@ -115,6 +116,7 @@ export class MarketplaceSellComponent implements OnInit {
   private readonly apiService = inject(ApiService);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
+  private readonly pendingTx = inject(PendingTransactionsService);
   readonly walletService = inject(WalletService);
 
   readonly bonds = signal<HeldBond[]>([]);
@@ -163,11 +165,15 @@ export class MarketplaceSellComponent implements OnInit {
 
   private updateSelectedBalance(bondId: unknown): void {
     const heldBond = this.bonds().find((bond) => bond.id === Number(bondId));
-    this.selectedBalance.set(heldBond?.balance ?? null);
+    this.selectedBalance.set(heldBond?.balance != null ? Number(heldBond.balance) : null);
   }
 
   onSubmit(): void {
-    if (this.form.invalid) return;
+    // Guards against a duplicate listing being submitted while one is
+    // already in flight (#91): the submit button's [disabled] binding covers
+    // a click, but a native form submit (e.g. pressing Enter) fires
+    // (ngSubmit) regardless of a button's disabled attribute.
+    if (this.form.invalid || this.submitting()) return;
     this.submitting.set(true);
     this.error.set('');
 
@@ -175,7 +181,8 @@ export class MarketplaceSellComponent implements OnInit {
     if (!formValue.expiresAfterSeconds) delete formValue.expiresAfterSeconds;
 
     this.apiService.listBondTokens(formValue).subscribe({
-      next: () => {
+      next: (res) => {
+        this.pendingTx.register(res.transactionHash, 'list');
         this.router.navigate(['/marketplace']);
       },
       error: (err) => {

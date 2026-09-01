@@ -2,12 +2,21 @@ import { Test } from '@nestjs/testing';
 import { nativeToScVal, scValToNative, xdr } from '@stellar/stellar-sdk';
 import { DexService } from './dex.service';
 import { ContractService } from '../stellar/contract.service';
+import { ContractException } from '../stellar/contract-errors';
 import { StellarService } from '../stellar/stellar.service';
 import { NonceService } from '../common/services/nonce.service';
 import { RedisService } from '../common/services/redis.service';
 import { SigningKeyProvider } from '../common/services/signing-key.provider';
 import { ConfigService } from '../config/config.service';
 import { OrderStatus } from './interfaces/marketplace.interface';
+
+const configServiceStub = { getDexRouterAddress: () => 'CDEXROUTERADDRESSPLACEHOLDER' };
+
+// Order-fixture `expires_at` must be in the future: DexService now derives an
+// order's effective status from expiry (#91), so a fixture using a
+// past/zero timestamp would be reclassified as Expired regardless of its
+// status index, breaking any fixture that intends to represent an open order.
+const FUTURE_EXPIRY = BigInt(Math.floor(Date.now() / 1000) + 3600);
 
 // ---------------------------------------------------------------------------
 // Minimal in-memory Redis stub used by cache-staleness tests.
@@ -103,10 +112,7 @@ describe('DexService', () => {
           provide: SigningKeyProvider,
           useValue: { adminSecret: jest.fn().mockReturnValue('SADMIN') },
         },
-        {
-          provide: ConfigService,
-          useValue: { getDexRouterAddress: jest.fn().mockReturnValue('CDEX') },
-        },
+        { provide: ConfigService, useValue: configServiceStub },
       ],
     }).compile();
 
@@ -130,7 +136,7 @@ describe('DexService', () => {
         nativeToScVal('USDC', { type: 'symbol' }),
         xdr.ScVal.scvU32(0),
         nativeToScVal(BigInt(1700000000), { type: 'u64' }),
-        nativeToScVal(BigInt(1700604800), { type: 'u64' }),
+        nativeToScVal(FUTURE_EXPIRY, { type: 'u64' }),
       ]);
 
     it('does not truncate listings when an intermediate order id is missing', async () => {
@@ -153,6 +159,29 @@ describe('DexService', () => {
         expect.objectContaining({ method: 'order_count' }),
       );
     });
+
+    it('filters orders by status explicitly', async () => {
+      simulateCallMock.mockImplementation(({ method, args }: { method: string; args: any[] }) => {
+        if (method === 'order_count') {
+          return Promise.resolve(nativeToScVal(BigInt(4), { type: 'u64' }));
+        }
+        const id = Number(scValToNative(args[0]));
+        // Make id 2 be Expired by setting expiresAt in the past
+        const pastExpiry = BigInt(Math.floor(Date.now() / 1000) - 100);
+        if (id === 2) {
+          const raw = rawOrder(id);
+          // Set expiry at index 8
+          (raw.value() as xdr.ScVal[])[8] = nativeToScVal(pastExpiry, { type: 'u64' });
+          return Promise.resolve(raw);
+        }
+        return Promise.resolve(rawOrder(id));
+      });
+
+      const result = await service.listOrders(undefined, 'Expired', 1, 10);
+
+      expect(result.data.map((order) => order.id)).toEqual([2]);
+      expect(result.meta.total).toBe(1);
+    });
   });
 
   describe('decodeOrder', () => {
@@ -168,7 +197,7 @@ describe('DexService', () => {
         'USDC',
          0,
         BigInt(1700000000),
-        BigInt(1700604800),
+        FUTURE_EXPIRY,
       ];
 
       expect((service as any).decodeOrder(raw)).toEqual({
@@ -199,7 +228,7 @@ describe('DexService', () => {
         'XLM',
         index,
         BigInt(0),
-        BigInt(0),
+        FUTURE_EXPIRY,
       ];
 
       expect((service as any).decodeOrder(raw).status).toBe(expected);
@@ -323,7 +352,7 @@ describe('DexService', () => {
         nativeToScVal('USDC', { type: 'symbol' }),
         xdr.ScVal.scvU32(statusIndex),
         nativeToScVal(BigInt(1700000000), { type: 'u64' }),
-        nativeToScVal(BigInt(1700604800), { type: 'u64' }),
+        nativeToScVal(FUTURE_EXPIRY, { type: 'u64' }),
       ]);
 
     it('listBondTokens calls delPattern("orders:*") and del("order:<id>")', async () => {
@@ -347,20 +376,30 @@ describe('DexService', () => {
     });
 
     it('buyBondTokens calls delPattern("orders:*") and del("order:<id>")', async () => {
+      // statusIndex 0 (Open): the pre-flight reconciliation check (#91) now
+      // rejects a buy against an order that isn't Open/PartiallyFilled, so
+      // this fixture must represent a genuinely actionable order.
       simulateCallMock.mockImplementation(({ method, args }: { method: string; args: any[] }) => {
-        if (method === 'get_order') return Promise.resolve(rawOrderScVal(Number(scValToNative(args[0])), 2));
+        if (method === 'get_order') return Promise.resolve(rawOrderScVal(Number(scValToNative(args[0])), 0));
         if (method === 'get_quote_balance') return Promise.resolve(nativeToScVal(BigInt(9_999_999), { type: 'i128' }));
         return Promise.reject(new Error(`unexpected: ${method}`));
       });
       invokeContractMethodMock.mockResolvedValue({ transactionHash: 'tx-buy', successful: true });
 
-      await service.buyBondTokens({ orderId: 3, amount: 10, maxPrice: 10 } as any, SELLER);
+      const order = await service.buyBondTokens({ orderId: 3, amount: 10, maxPrice: 10 } as any, SELLER);
 
       expect(redis.delPattern).toHaveBeenCalledWith('orders:*');
       expect(redis.del).toHaveBeenCalledWith('order:3');
+      expect(order.transactionHash).toBe('tx-buy');
     });
 
     it('cancelOrder calls delPattern("orders:*") and del("order:<id>")', async () => {
+      // cancelOrder now also revalidates against a fresh ledger read (#91)
+      // before invoking cancel_listing, so get_order must be mocked here too.
+      simulateCallMock.mockImplementation(({ method, args }: { method: string; args: any[] }) => {
+        if (method === 'get_order') return Promise.resolve(rawOrderScVal(Number(scValToNative(args[0])), 0));
+        return Promise.reject(new Error(`unexpected: ${method}`));
+      });
       invokeContractMethodMock.mockResolvedValue({ transactionHash: 'tx-cancel', successful: true });
 
       await service.cancelOrder(7, SELLER);
@@ -368,6 +407,146 @@ describe('DexService', () => {
       expect(redis.delPattern).toHaveBeenCalledWith('orders:*');
       expect(redis.del).toHaveBeenCalledWith('order:7');
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Order reconciliation (#91): buy/cancel must revalidate against the
+  // order's true current state -- including expiry, which the contract's own
+  // persisted `status` does not reflect until the hourly clean_expired_orders
+  // sweep visits that order -- immediately before acting, and reject clearly
+  // when it is no longer actionable.
+  // -------------------------------------------------------------------------
+  describe('order reconciliation (#91)', () => {
+    const SELLER = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
+    const BUYER = 'GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBWMY';
+
+    const buildOrderScVal = (opts: { id: number; statusIndex: number; expiresAt: bigint }) =>
+      xdr.ScVal.scvVec([
+        nativeToScVal(BigInt(opts.id), { type: 'u64' }),
+        nativeToScVal(SELLER, { type: 'address' }),
+        nativeToScVal(BigInt(1), { type: 'u64' }),
+        nativeToScVal(BigInt(100), { type: 'i128' }),
+        nativeToScVal(BigInt(10), { type: 'i128' }),
+        nativeToScVal('USDC', { type: 'symbol' }),
+        xdr.ScVal.scvU32(opts.statusIndex),
+        nativeToScVal(BigInt(1700000000), { type: 'u64' }),
+        nativeToScVal(opts.expiresAt, { type: 'u64' }),
+      ]);
+
+    it('rejects a buy when a fresh read shows the order is already Filled, even with a stale cached "Open" copy', async () => {
+      // A stale cached copy says Open; the pre-flight fetch must bypass this
+      // cache entirely (it never calls redis.get) and see the true Filled state.
+      redis.get.mockImplementation((key: string) =>
+        key === 'order:5'
+          ? Promise.resolve(JSON.stringify({ status: OrderStatus.Open }))
+          : Promise.resolve(null),
+      );
+      simulateCallMock.mockImplementation(({ method, args }: { method: string; args: any[] }) =>
+        method === 'get_order'
+          ? Promise.resolve(buildOrderScVal({ id: Number(scValToNative(args[0])), statusIndex: 2, expiresAt: FUTURE_EXPIRY }))
+          : Promise.reject(new Error(`unexpected: ${method}`)),
+      );
+
+      await expect(
+        service.buyBondTokens({ orderId: 5, amount: 10, maxPrice: 10 } as any, BUYER),
+      ).rejects.toMatchObject({ status: 409 });
+
+      expect(invokeContractMethodMock).not.toHaveBeenCalled();
+    });
+
+    it('rejects a buy when the order has passed its expiry, even though its persisted status is still Open', async () => {
+      const pastExpiry = BigInt(Math.floor(Date.now() / 1000) - 60);
+      simulateCallMock.mockImplementation(({ method, args }: { method: string; args: any[] }) =>
+        method === 'get_order'
+          ? Promise.resolve(buildOrderScVal({ id: Number(scValToNative(args[0])), statusIndex: 0, expiresAt: pastExpiry }))
+          : Promise.reject(new Error(`unexpected: ${method}`)),
+      );
+
+      await expect(
+        service.buyBondTokens({ orderId: 6, amount: 10, maxPrice: 10 } as any, BUYER),
+      ).rejects.toMatchObject({ status: 409 });
+
+      expect(invokeContractMethodMock).not.toHaveBeenCalled();
+    });
+
+    it('rejects a cancel when a fresh read shows the order is no longer Open/PartiallyFilled', async () => {
+      simulateCallMock.mockImplementation(({ method, args }: { method: string; args: any[] }) =>
+        method === 'get_order'
+          ? Promise.resolve(buildOrderScVal({ id: Number(scValToNative(args[0])), statusIndex: 3, expiresAt: FUTURE_EXPIRY })) // Cancelled
+          : Promise.reject(new Error(`unexpected: ${method}`)),
+      );
+
+      await expect(service.cancelOrder(8, SELLER)).rejects.toMatchObject({ status: 409 });
+      expect(invokeContractMethodMock).not.toHaveBeenCalled();
+    });
+
+    it('maps a contract-level rejection during cancel to a clean Conflict instead of leaking the raw error', async () => {
+      simulateCallMock.mockImplementation(({ method, args }: { method: string; args: any[] }) =>
+        method === 'get_order'
+          ? Promise.resolve(buildOrderScVal({ id: Number(scValToNative(args[0])), statusIndex: 0, expiresAt: FUTURE_EXPIRY }))
+          : Promise.reject(new Error(`unexpected: ${method}`)),
+      );
+      invokeContractMethodMock.mockRejectedValue(new Error('HostError: Error(Contract, #5)'));
+
+      await expect(service.cancelOrder(9, SELLER)).rejects.toMatchObject({ status: 409 });
+    });
+
+    it('rejects a stale price before invoking the purchase contract', async () => {
+      simulateCallMock.mockImplementation(({ method, args }: { method: string; args: any[] }) =>
+        method === 'get_order'
+          ? Promise.resolve(buildOrderScVal({ id: Number(scValToNative(args[0])), statusIndex: 0, expiresAt: FUTURE_EXPIRY }))
+          : Promise.reject(new Error(`unexpected: ${method}`)),
+      );
+
+      await expect(service.buyBondTokens({ orderId: 10, amount: 10, maxPrice: 9 } as any, BUYER))
+        .rejects.toMatchObject({ status: 409 });
+      expect(invokeContractMethodMock).not.toHaveBeenCalled();
+    });
+
+    it('rejects a partial-depth change before invoking the purchase contract', async () => {
+      simulateCallMock.mockImplementation(({ method, args }: { method: string; args: any[] }) =>
+        method === 'get_order'
+          ? Promise.resolve(buildOrderScVal({ id: Number(scValToNative(args[0])), statusIndex: 1, expiresAt: FUTURE_EXPIRY }))
+          : Promise.reject(new Error(`unexpected: ${method}`)),
+      );
+
+      await expect(service.buyBondTokens({ orderId: 11, amount: 101, maxPrice: 10 } as any, BUYER))
+        .rejects.toMatchObject({ status: 409 });
+      expect(invokeContractMethodMock).not.toHaveBeenCalled();
+    });
+
+    it('decodeOrder reports Expired once the wall clock passes expires_at, even though the raw status index is still Open', () => {
+      const pastExpiry = BigInt(Math.floor(Date.now() / 1000) - 1);
+      const raw = [BigInt(10), SELLER, BigInt(1), BigInt(100), BigInt(10), 'USDC', 0, BigInt(1700000000), pastExpiry];
+
+      expect((service as any).decodeOrder(raw).status).toBe(OrderStatus.Expired);
+    });
+
+    it('decodeOrder leaves a terminal status (Filled/Cancelled) unchanged regardless of expiry', () => {
+      const pastExpiry = BigInt(Math.floor(Date.now() / 1000) - 1);
+      const raw = [BigInt(11), SELLER, BigInt(1), BigInt(100), BigInt(10), 'USDC', 2, BigInt(1700000000), pastExpiry];
+
+      expect((service as any).decodeOrder(raw).status).toBe(OrderStatus.Filled);
+    });
+  });
+});
+
+describe('DexService — mapDexError (unit)', () => {
+  it('maps InsufficientFunds contract error to PAYMENT_REQUIRED HttpException', () => {
+    const svc = new DexService({} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const err = new ContractException('DEX_INSUFFICIENT_FUNDS', 'insufficient', undefined, undefined, 10);
+    const mapped = (svc as any).mapDexError(err);
+    expect(mapped).toBeInstanceOf(Object);
+    // ensure it's an HttpException with payment required
+    const status = (mapped as any).getStatus ? (mapped as any).getStatus() : (mapped as any).status;
+    expect(status).toBe(402);
+  });
+
+  it('falls back to BadRequestException for unknown contract codes', () => {
+    const svc = new DexService({} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const err = new ContractException('SOME_CODE', 'some detail', undefined, undefined, 999);
+    const mapped = (svc as any).mapDexError(err);
+    expect(mapped).toBeInstanceOf(Object);
   });
 });
 
@@ -398,7 +577,7 @@ describe('DexService — cache staleness (in-memory Redis)', () => {
       nativeToScVal('USDC', { type: 'symbol' }),
       xdr.ScVal.scvU32(statusIndex),
       nativeToScVal(BigInt(1700000000), { type: 'u64' }),
-      nativeToScVal(BigInt(1700604800), { type: 'u64' }),
+      nativeToScVal(FUTURE_EXPIRY, { type: 'u64' }),
     ]);
 
   beforeEach(async () => {
@@ -417,10 +596,7 @@ describe('DexService — cache staleness (in-memory Redis)', () => {
           provide: SigningKeyProvider,
           useValue: { adminSecret: jest.fn().mockReturnValue('SADMIN') },
         },
-        {
-          provide: ConfigService,
-          useValue: { getDexRouterAddress: jest.fn().mockReturnValue('CDEX') },
-        },
+        { provide: ConfigService, useValue: configServiceStub },
       ],
     }).compile();
 
@@ -500,9 +676,10 @@ describe('DexService — cache staleness (in-memory Redis)', () => {
   });
 
   it('buyBondTokens: stale orders:* cache is evicted so the next listOrders returns fresh data', async () => {
+    // statusIndex 0 (Open): must be actionable for the pre-flight check (#91) to allow the buy.
     simulateCall.mockImplementation(({ method, args }: { method: string; args: any[] }) => {
       if (method === 'get_order') {
-        return Promise.resolve(rawOrderScVal(Number(scValToNative(args[0])), 2));
+        return Promise.resolve(rawOrderScVal(Number(scValToNative(args[0])), 0));
       }
       if (method === 'get_quote_balance') {
         return Promise.resolve(nativeToScVal(BigInt(9_999_999), { type: 'i128' }));
@@ -521,7 +698,12 @@ describe('DexService — cache staleness (in-memory Redis)', () => {
 
   it('cancelOrder: stale orders:* cache is evicted so the next listOrders returns fresh data', async () => {
     invokeContractMethod.mockResolvedValue({ transactionHash: 'tx-cancel', successful: true });
-    simulateCall.mockImplementation(({ method }: { method: string }) => {
+    // cancelOrder's pre-flight reconciliation check (#91) reads get_order before
+    // cancel_listing, so it must be mocked here in addition to order_count.
+    simulateCall.mockImplementation(({ method, args }: { method: string; args: any[] }) => {
+      if (method === 'get_order') {
+        return Promise.resolve(rawOrderScVal(Number(scValToNative(args[0])), 0));
+      }
       if (method === 'order_count') {
         return Promise.resolve(nativeToScVal(BigInt(0), { type: 'u64' }));
       }
@@ -548,10 +730,17 @@ describe('DexService — cache staleness (in-memory Redis)', () => {
       }),
     );
 
+    // The pre-flight reconciliation check (#91) reads get_order before the
+    // purchase executes, then buyBondTokens's own post-mutation getOrder()
+    // reads it again once the cache has been invalidated. Model that
+    // sequence accurately: the order is genuinely Open going in (allowing
+    // the buy to proceed) and Filled once read back afterwards.
+    let getOrderCalls = 0;
     simulateCall.mockImplementation(({ method, args }: { method: string; args: any[] }) => {
       if (method === 'get_order') {
-        // Fresh call returns Filled (statusIndex = 2)
-        return Promise.resolve(rawOrderScVal(Number(scValToNative(args[0])), 2));
+        getOrderCalls += 1;
+        const statusIndex = getOrderCalls === 1 ? 0 : 2; // 1st call (pre-flight): Open; later calls: Filled
+        return Promise.resolve(rawOrderScVal(Number(scValToNative(args[0])), statusIndex));
       }
       if (method === 'get_quote_balance') {
         return Promise.resolve(nativeToScVal(BigInt(9_999_999), { type: 'i128' }));
@@ -586,6 +775,13 @@ describe('DexService — cache staleness (in-memory Redis)', () => {
       JSON.stringify({ id: orderId, status: OrderStatus.Open }),
     );
 
+    // cancelOrder's pre-flight reconciliation check (#91) reads get_order first.
+    simulateCall.mockImplementation(({ method, args }: { method: string; args: any[] }) => {
+      if (method === 'get_order') {
+        return Promise.resolve(rawOrderScVal(Number(scValToNative(args[0])), 0));
+      }
+      return Promise.reject(new Error(`unexpected: ${method}`));
+    });
     invokeContractMethod.mockResolvedValue({ transactionHash: 'tx-cancel', successful: true });
 
     await service.cancelOrder(orderId, SELLER);

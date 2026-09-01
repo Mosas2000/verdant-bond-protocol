@@ -1,11 +1,13 @@
 import { ContractService } from './contract.service';
 import { StellarService } from './stellar.service';
 import { NonceService } from '../common/services/nonce.service';
+import { ConfigService } from '../config/config.service';
 
 describe('ContractService Soroban polling', () => {
   const service = new ContractService(
     {} as StellarService,
     {} as NonceService,
+    {} as ConfigService,
   );
 
   beforeEach(() => {

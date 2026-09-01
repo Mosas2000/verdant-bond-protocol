@@ -1,5 +1,6 @@
 #![no_std]
 #![allow(deprecated)]
+#![allow(clippy::too_many_arguments)]
 use nbbs_oracle_consumer::Report;
 use nbbs_shared::{BiodiversityMetrics, BondError, CreditType, ReportStatus};
 use soroban_sdk::{
@@ -8,6 +9,10 @@ use soroban_sdk::{
 
 pub const FIXED_POINT: i128 = 10_000_000;
 pub const CREDIT_DIVISOR: i128 = 1_000;
+/// Minor units per whole credit (6 decimals), matching every credit type.
+/// All on-chain credit amounts are denominated in minor units so proportional
+/// coupon shares below a whole credit can be represented exactly.
+pub const CREDIT_MINOR_UNITS: i128 = 1_000_000;
 pub const HABITAT_CREDIT_RATE: i128 = 1_000_000;
 pub const SPECIES_CREDIT_RATE: i128 = 100_000;
 pub const UNIT_CREDIT_RATE: i128 = 1_000_000;
@@ -29,6 +34,9 @@ pub enum DataKey {
     BondIssuerAddress,
     OracleConsumerAddress,
     Nonce(Address),
+    /// Per-period, per-type holder accrual ledger backing the itemized
+    /// claimable-credit provenance view (#156).
+    PeriodHolder(u64, u32, Address, CreditType),
 }
 
 #[derive(Clone)]
@@ -51,6 +59,20 @@ pub struct CouponResult {
     pub total_credits: i128,
     pub holder_count: u32,
     pub credits_per_token: i128,
+}
+
+/// One line of the itemized claimable-credit provenance view (#156): the
+/// period, the underlying report, the credit type and the unclaimed amount in
+/// minor units.
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub struct ClaimableCreditDetail {
+    pub period_index: u32,
+    pub report_id: u64,
+    pub start_time: u64,
+    pub end_time: u64,
+    pub credit_type: CreditType,
+    pub amount: i128,
 }
 
 #[contract]
@@ -217,7 +239,12 @@ impl CouponEngine {
             .get(&DataKey::BondCreditType(bond_id))
             .ok_or(BondError::BondNotFound)?;
 
-        let carbon_total = report.carbon_sequestered / CREDIT_DIVISOR;
+        let carbon_total = report
+            .carbon_sequestered
+            .checked_div(CREDIT_DIVISOR)
+            .ok_or(BondError::Overflow)?
+            .checked_mul(CREDIT_MINOR_UNITS)
+            .ok_or(BondError::Overflow)?;
         let (carbon_total, biodiversity_total) = match credit_type {
             CreditType::Carbon | CreditType::BlueCarbon => (carbon_total, 0),
             CreditType::Biodiversity => match report.biodiversity {
@@ -300,6 +327,7 @@ impl CouponEngine {
                             accrue_credits(
                                 &env,
                                 bond_id,
+                                period_index,
                                 holder.clone(),
                                 CreditType::Carbon,
                                 holder_credits,
@@ -317,6 +345,7 @@ impl CouponEngine {
                             accrue_credits(
                                 &env,
                                 bond_id,
+                                period_index,
                                 holder.clone(),
                                 CreditType::Biodiversity,
                                 holder_credits,
@@ -339,6 +368,7 @@ impl CouponEngine {
                                 accrue_credits(
                                     &env,
                                     bond_id,
+                                    period_index,
                                     holder.clone(),
                                     CreditType::Carbon,
                                     carbon_holder,
@@ -348,6 +378,7 @@ impl CouponEngine {
                                 accrue_credits(
                                     &env,
                                     bond_id,
+                                    period_index,
                                     holder.clone(),
                                     CreditType::Biodiversity,
                                     biodiversity_holder,
@@ -451,6 +482,58 @@ impl CouponEngine {
             .unwrap_or(0)
     }
 
+    /// Total claimable coupons for a holder on a bond, in minor units (#156).
+    pub fn claimable_credits(env: Env, bond_id: u64, holder: Address) -> i128 {
+        Self::accrued_credits(env, bond_id, holder)
+    }
+
+    /// Itemized claimable coupons for a holder on a bond (#156). One entry per
+    /// (period, credit type) with the underlying report id and period window.
+    pub fn claimable_credit_details(
+        env: Env,
+        bond_id: u64,
+        holder: Address,
+    ) -> Vec<ClaimableCreditDetail> {
+        let period_count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PeriodCount(bond_id))
+            .unwrap_or(0);
+        let mut details: Vec<ClaimableCreditDetail> = Vec::new(&env);
+        for period_index in 0..period_count {
+            for credit_type in [CreditType::Carbon, CreditType::Biodiversity] {
+                let amount: i128 = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::PeriodHolder(
+                        bond_id,
+                        period_index,
+                        holder.clone(),
+                        credit_type,
+                    ))
+                    .unwrap_or(0);
+                if amount <= 0 {
+                    continue;
+                }
+                let info: Option<PeriodInfo> = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::PeriodInfo(bond_id, period_index));
+                if let Some(info) = info {
+                    details.push_back(ClaimableCreditDetail {
+                        period_index,
+                        report_id: info.report_id,
+                        start_time: info.start_time,
+                        end_time: info.end_time,
+                        credit_type,
+                        amount,
+                    });
+                }
+            }
+        }
+        details
+    }
+
     pub fn get_bond_credit_type(env: Env, bond_id: u64) -> Result<CreditType, BondError> {
         env.storage()
             .instance()
@@ -493,6 +576,28 @@ impl CouponEngine {
                     clear_accrued(&env, bond_id, &caller, CreditType::Biodiversity);
                 }
                 None => {}
+            }
+
+            let period_count: u32 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::PeriodCount(bond_id))
+                .unwrap_or(0);
+            for period_index in 0..period_count {
+                clear_period_holder(
+                    &env,
+                    bond_id,
+                    period_index,
+                    &caller,
+                    CreditType::Carbon,
+                );
+                clear_period_holder(
+                    &env,
+                    bond_id,
+                    period_index,
+                    &caller,
+                    CreditType::Biodiversity,
+                );
             }
         }
 
@@ -623,12 +728,14 @@ fn compute_biodiversity_credits(metrics: &BiodiversityMetrics) -> i128 {
         .saturating_mul(HABITAT_CREDIT_RATE)
         .saturating_add(species.saturating_mul(SPECIES_CREDIT_RATE))
         .saturating_add(units.saturating_mul(UNIT_CREDIT_RATE))
+        .saturating_mul(CREDIT_MINOR_UNITS)
         .saturating_div(HABITAT_CREDIT_RATE)
 }
 
 fn accrue_credits(
     env: &Env,
     bond_id: u64,
+    period_index: u32,
     holder: Address,
     credit_type: CreditType,
     amount: i128,
@@ -640,6 +747,13 @@ fn accrue_credits(
         &by_type.checked_add(amount).ok_or(BondError::Overflow)?,
     );
 
+    let period_key = DataKey::PeriodHolder(bond_id, period_index, holder.clone(), credit_type);
+    let period_amount: i128 = env.storage().persistent().get(&period_key).unwrap_or(0);
+    env.storage().persistent().set(
+        &period_key,
+        &period_amount.checked_add(amount).ok_or(BondError::Overflow)?,
+    );
+
     let combined_key = DataKey::AccruedCredits(bond_id, holder);
     let combined: i128 = env.storage().persistent().get(&combined_key).unwrap_or(0);
     env.storage().persistent().set(
@@ -647,6 +761,17 @@ fn accrue_credits(
         &combined.checked_add(amount).ok_or(BondError::Overflow)?,
     );
     Ok(())
+}
+
+fn clear_period_holder(
+    env: &Env,
+    bond_id: u64,
+    period_index: u32,
+    holder: &Address,
+    credit_type: CreditType,
+) {
+    let key = DataKey::PeriodHolder(bond_id, period_index, holder.clone(), credit_type);
+    env.storage().persistent().set(&key, &0i128);
 }
 
 fn clear_accrued(env: &Env, bond_id: u64, holder: &Address, credit_type: CreditType) {
@@ -775,6 +900,12 @@ mod test {
         bond_id
     }
 
+    /// Consumes 3 of the admin's OracleConsumer nonces: registering the
+    /// reporting provider (`admin_nonce`), the admin's own verification
+    /// (`admin_nonce + 1`), and registering a second, independent verifier
+    /// (`admin_nonce + 2`) to satisfy the default 2-verifier threshold — the
+    /// admin's signature alone isn't sufficient (see "Multi-Source
+    /// Verification Threshold" in docs/oracle-design.md).
     fn submit_verified_report(
         env: &Env,
         t: &TestEnv,
@@ -803,6 +934,21 @@ mod test {
             &0,
         );
         oc.verify_report(&t.admin, &report_id, &(admin_nonce + 1));
+
+        let second_verifier = Address::generate(env);
+        oc.register_provider(
+            &t.admin,
+            &second_verifier,
+            &Symbol::new(env, "satellite"),
+            &(admin_nonce + 2),
+        );
+        oc.add_stake(
+            &second_verifier,
+            &nbbs_oracle_consumer::DEFAULT_MIN_VERIFIER_STAKE,
+            &0,
+        );
+        oc.verify_report(&second_verifier, &report_id, &1);
+
         report_id
     }
 
@@ -912,16 +1058,19 @@ mod test {
 
         assert_eq!(result.bond_id, bond_id);
         assert_eq!(result.period_index, 0);
-        assert_eq!(result.total_credits, 100);
+        assert_eq!(result.total_credits, 100 * CREDIT_MINOR_UNITS);
         assert_eq!(result.holder_count, 1);
-        assert_eq!(result.credits_per_token, 100 * FIXED_POINT / 10000);
+        assert_eq!(
+            result.credits_per_token,
+            100 * CREDIT_MINOR_UNITS * FIXED_POINT / 10000
+        );
 
         let accrued = t.client.accrued_credits(&bond_id, &holder);
-        assert_eq!(accrued, 100);
+        assert_eq!(accrued, 100 * CREDIT_MINOR_UNITS);
 
         let period_info = t.client.get_period_info(&bond_id, &0);
         assert!(period_info.distributed);
-        assert_eq!(period_info.total_credits_earned, 100);
+        assert_eq!(period_info.total_credits_earned, 100 * CREDIT_MINOR_UNITS);
         assert_eq!(period_info.report_id, report_id);
     }
 
@@ -963,7 +1112,11 @@ mod test {
             .client
             .distribute_coupon(&t.admin, &bond_id, &0, &holders, &report_id, &1);
 
-        let total = 500 + 125 * SPECIES_CREDIT_RATE / HABITAT_CREDIT_RATE + 1_000;
+        let total = (500 * HABITAT_CREDIT_RATE
+            + 125 * SPECIES_CREDIT_RATE
+            + 1_000 * UNIT_CREDIT_RATE)
+            * CREDIT_MINOR_UNITS
+            / HABITAT_CREDIT_RATE;
         assert_eq!(result.total_credits, total);
 
         let accrued = t.client.accrued_credits(&bond_id, &holder);
@@ -1011,13 +1164,18 @@ mod test {
             .client
             .distribute_coupon(&t.admin, &bond_id, &0, &holders, &report_id, &1);
 
-        let bio_total = 500 + 125 * SPECIES_CREDIT_RATE / HABITAT_CREDIT_RATE + 1_000;
-        assert_eq!(result.total_credits, 100 + bio_total);
+        let bio_total = (500 * HABITAT_CREDIT_RATE
+            + 125 * SPECIES_CREDIT_RATE
+            + 1_000 * UNIT_CREDIT_RATE)
+            * CREDIT_MINOR_UNITS
+            / HABITAT_CREDIT_RATE;
+        let carbon_total = 100 * CREDIT_MINOR_UNITS;
+        assert_eq!(result.total_credits, carbon_total + bio_total);
 
         let carbon_accrued =
             t.client
                 .accrued_credits_by_type(&bond_id, &holder, &nbbs_shared::CreditType::Carbon);
-        assert_eq!(carbon_accrued, 100);
+        assert_eq!(carbon_accrued, carbon_total);
         let bio_accrued = t.client.accrued_credits_by_type(
             &bond_id,
             &holder,
@@ -1026,7 +1184,7 @@ mod test {
         assert_eq!(bio_accrued, bio_total);
 
         let combined = t.client.accrued_credits(&bond_id, &holder);
-        assert_eq!(combined, 100 + bio_total);
+        assert_eq!(combined, carbon_total + bio_total);
     }
 
     #[test]
@@ -1092,17 +1250,18 @@ mod test {
             .client
             .distribute_coupon(&t.admin, &bond_id, &0, &holders, &report_id, &1);
 
-        assert_eq!(result.total_credits, 100);
+        let total_credits = 100 * CREDIT_MINOR_UNITS;
+        assert_eq!(result.total_credits, total_credits);
         assert_eq!(result.holder_count, 2);
 
         let total_sub = 10000i128;
-        let credits_per_token = 100 * FIXED_POINT / total_sub;
+        let credits_per_token = total_credits * FIXED_POINT / total_sub;
         let expected_h1 = credits_per_token * 3000 / FIXED_POINT;
         let expected_h2 = credits_per_token * 7000 / FIXED_POINT;
 
         assert_eq!(t.client.accrued_credits(&bond_id, &holder1), expected_h1);
         assert_eq!(t.client.accrued_credits(&bond_id, &holder2), expected_h2);
-        assert_eq!(expected_h1 + expected_h2, 100);
+        assert_eq!(expected_h1 + expected_h2, total_credits);
     }
 
     #[test]
@@ -1284,10 +1443,56 @@ mod test {
             .distribute_coupon(&t.admin, &bond_id, &0, &holders, &report_id, &1);
 
         let claimed = t.client.claim_credits(&holder, &bond_id, &0);
-        assert_eq!(claimed, 100);
+        assert_eq!(claimed, 100 * CREDIT_MINOR_UNITS);
 
         let accrued = t.client.accrued_credits(&bond_id, &holder);
         assert_eq!(accrued, 0);
+    }
+
+    #[test]
+    fn test_claimable_credit_details_round_trip() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let t = deploy(env, admin);
+
+        let project_id = create_project_id(&t._env, 1);
+        let holder = Address::generate(&t._env);
+
+        let bond_id = issue_and_subscribe(&t._env, &t, &project_id, &holder, 10_000);
+        t.client.register_bond(&t.admin, &bond_id, &project_id, &0);
+
+        let report_id = submit_verified_report(
+            &t._env,
+            &t,
+            &project_id,
+            100_000,
+            BiodiversityMetrics::Absent,
+            0,
+        );
+        let holders = vec![&t._env, holder.clone()];
+        t.client
+            .distribute_coupon(&t.admin, &bond_id, &0, &holders, &report_id, &1);
+
+        assert_eq!(
+            t.client.claimable_credits(&bond_id, &holder),
+            100 * CREDIT_MINOR_UNITS
+        );
+
+        let details = t.client.claimable_credit_details(&bond_id, &holder);
+        assert_eq!(details.len(), 1);
+        assert_eq!(details.get(0).unwrap().period_index, 0);
+        assert_eq!(details.get(0).unwrap().report_id, report_id);
+        assert_eq!(
+            details.get(0).unwrap().credit_type,
+            nbbs_shared::CreditType::Carbon
+        );
+        assert_eq!(details.get(0).unwrap().amount, 100 * CREDIT_MINOR_UNITS);
+
+        t.client.claim_credits(&holder, &bond_id, &0);
+        assert_eq!(t.client.claimable_credits(&bond_id, &holder), 0);
+        assert_eq!(t.client.claimable_credit_details(&bond_id, &holder).len(), 0);
     }
 
     #[test]
@@ -1362,7 +1567,7 @@ mod test {
             &project_id,
             200_000,
             BiodiversityMetrics::Absent,
-            2,
+            3,
         );
         t.client
             .distribute_coupon(&t.admin, &bond_id, &1, &holders, &report_id2, &2);
@@ -1408,15 +1613,19 @@ mod test {
             .client
             .distribute_coupon(&t.admin, &bond_id, &0, &holders, &report_id, &1);
 
-        assert_eq!(result.total_credits, 99);
+        let total = 100 * CREDIT_MINOR_UNITS;
+        let credits_per_token = total * FIXED_POINT / 3;
+        let per_holder = credits_per_token * 1 / FIXED_POINT;
+        let distributed = per_holder * 3;
+        assert_eq!(result.total_credits, distributed);
 
         let period_info = t.client.get_period_info(&bond_id, &0);
-        assert_eq!(period_info.undistributed, 1);
+        assert_eq!(period_info.undistributed, total - distributed);
 
-        assert_eq!(t.client.get_undistributed_total(&bond_id), 1);
+        assert_eq!(t.client.get_undistributed_total(&bond_id), total - distributed);
 
         let swept = t.client.sweep_undistributed(&t.admin, &bond_id, &2);
-        assert_eq!(swept, 1);
+        assert_eq!(swept, total - distributed);
 
         assert_eq!(t.client.get_undistributed_total(&bond_id), 0);
     }
@@ -1482,18 +1691,24 @@ mod test {
         let first = t
             .client
             .distribute_coupon_batch(&t.admin, &bond_id, &0, &holders, &report_id, &0, &1, &1);
-        assert_eq!(first.total_credits, 50);
+        assert_eq!(first.total_credits, 50 * CREDIT_MINOR_UNITS);
         assert!(!t.client.get_period_info(&bond_id, &0).distributed);
         assert_eq!(t.client.get_period_count(&bond_id), 0);
 
         let second = t
             .client
             .distribute_coupon_batch(&t.admin, &bond_id, &0, &holders, &report_id, &1, &1, &2);
-        assert_eq!(second.total_credits, 100);
+        assert_eq!(second.total_credits, 100 * CREDIT_MINOR_UNITS);
         assert!(t.client.get_period_info(&bond_id, &0).distributed);
         assert_eq!(t.client.get_period_count(&bond_id), 1);
-        assert_eq!(t.client.accrued_credits(&bond_id, &holder_a), 50);
-        assert_eq!(t.client.accrued_credits(&bond_id, &holder_b), 50);
+        assert_eq!(
+            t.client.accrued_credits(&bond_id, &holder_a),
+            50 * CREDIT_MINOR_UNITS
+        );
+        assert_eq!(
+            t.client.accrued_credits(&bond_id, &holder_b),
+            50 * CREDIT_MINOR_UNITS
+        );
     }
 
     #[test]
@@ -1677,7 +1892,7 @@ mod test {
                     holders_vec.push_back(h.clone());
                 }
 
-                let total_credits = carbon / 1000;
+                let total_credits = carbon / CREDIT_DIVISOR * CREDIT_MINOR_UNITS;
                 let result = t.client.distribute_coupon(
                     &t.admin,
                     &bond_id,
@@ -1740,7 +1955,7 @@ mod test {
                         &create_project_id(&t._env, 7),
                         carbon,
                         BiodiversityMetrics::Absent,
-                        (period as u64) * 2,
+                        (period as u64) * 3,
                     );
                     t.client.distribute_coupon(
                         &t.admin,
@@ -1750,7 +1965,7 @@ mod test {
                         &report_id,
                         &(1 + period as u64),
                     );
-                    let total_credits = carbon / 1000;
+                    let total_credits = carbon / CREDIT_DIVISOR * CREDIT_MINOR_UNITS;
                     let distributed =
                         expected_distributed(&balances, total_credits, total_subscribed);
                     sum_undistributed += total_credits.saturating_sub(distributed);
@@ -1768,15 +1983,19 @@ mod test {
                 for (holder, &balance) in holders.iter().zip(balances.iter()) {
                     let mut holder_accrued = 0i128;
                     for &carbon in [carbon_0, carbon_1].iter() {
-                        holder_accrued +=
-                            expected_credits(carbon / 1000, total_subscribed, balance);
+                        holder_accrued += expected_credits(
+                            carbon / CREDIT_DIVISOR * CREDIT_MINOR_UNITS,
+                            total_subscribed,
+                            balance,
+                        );
                     }
                     sum_accrued += holder_accrued;
                     prop_assert_eq!(t.client.accrued_credits(&bond_id, holder), holder_accrued);
                 }
                 prop_assert_eq!(
                     sum_accrued + sum_undistributed,
-                    (carbon_0 / 1000) + (carbon_1 / 1000)
+                    (carbon_0 / CREDIT_DIVISOR * CREDIT_MINOR_UNITS)
+                        + (carbon_1 / CREDIT_DIVISOR * CREDIT_MINOR_UNITS)
                 );
             }
         }

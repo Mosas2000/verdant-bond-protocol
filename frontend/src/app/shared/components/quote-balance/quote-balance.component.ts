@@ -173,8 +173,8 @@ export class QuoteBalanceComponent implements OnInit {
       xlmWallet: this.apiService.getWalletBalance('XLM').pipe(catchError(() => of({ balance: 0 }))),
     }).subscribe({
       next: (res) => {
-        this.balances.set({ USDC: res.usdcEscrow.balance, XLM: res.xlmEscrow.balance });
-        this.walletBalances.set({ USDC: res.usdcWallet.balance, XLM: res.xlmWallet.balance });
+        this.balances.set({ USDC: Number(res.usdcEscrow.balance), XLM: Number(res.xlmEscrow.balance) });
+        this.walletBalances.set({ USDC: Number(res.usdcWallet.balance), XLM: Number(res.xlmWallet.balance) });
         this.loading.set(false);
         this.balanceChange.emit(this.balances());
       },

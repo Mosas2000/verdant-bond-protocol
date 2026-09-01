@@ -87,6 +87,29 @@ export class RedisService {
   }
 
   /**
+   * Atomically get the value of `key` and delete it in a single Redis operation.
+   *
+   * This is the safe primitive for one-time-use tokens (e.g. auth challenges):
+   * if a value is returned, the caller knows they are the exclusive consumer
+   * and no concurrent request could have read the same value.
+   *
+   * Returns the previous value stored at `key`, or `null` if the key did not
+   * exist (already consumed / expired / never set).
+   *
+   * Throws ServiceUnavailableException on Redis failure so callers do not
+   * silently fall back to non-atomic behaviour.
+   */
+  async getDel(key: string): Promise<string | null> {
+    try {
+      return await this.redis.getDel(key);
+    } catch (error) {
+      this.healthy = false;
+      this.logger.error(`Redis getDel failed for ${key}: ${this.message(error)}`);
+      throw new ServiceUnavailableException('Challenge consumption is unavailable');
+    }
+  }
+
+  /**
    * Delete all keys matching a glob pattern.
    *
    * Uses SCAN with MATCH to enumerate matching keys without blocking Redis,
@@ -167,6 +190,55 @@ export class RedisService {
       );
     } catch (error) {
       this.throwUnavailable('unlock', key, error);
+    }
+  }
+
+  async expire(key: string, seconds: number): Promise<boolean> {
+    try {
+      return await this.redis.expire(key, seconds);
+    } catch (error) {
+      this.logDegraded('expire', key, error);
+      return false;
+    }
+  }
+
+  /**
+   * Reserve a key only if it does not already exist (Redis `SET ... NX`).
+   *
+   * Used for admin-intent replay protection: a nonce may be consumed exactly
+   * once. Returns true if this call reserved the key (first use), false if it
+   * already existed (replay attempt). The key auto-expires after `seconds`.
+   */
+  async setNx(key: string, seconds: number): Promise<boolean> {
+    try {
+      const result = await this.redis.set(key, '1', { NX: true, EX: seconds });
+      return result === 'OK';
+    } catch (error) {
+      this.logDegraded('setNx', key, error);
+      return false;
+    }
+  }
+
+  /**
+   * Like {@link setNx} but stores an arbitrary string value (used for
+   * idempotency records). Returns true only if the key was newly created.
+   */
+  async setNxValue(key: string, value: string, seconds: number): Promise<boolean> {
+    try {
+      const result = await this.redis.set(key, value, { NX: true, EX: seconds });
+      return result === 'OK';
+    } catch (error) {
+      this.logDegraded('setNxValue', key, error);
+      return false;
+    }
+  }
+
+  async ttl(key: string): Promise<number> {
+    try {
+      return await this.redis.ttl(key);
+    } catch (error) {
+      this.logDegraded('ttl', key, error);
+      return -1;
     }
   }
 
